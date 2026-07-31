@@ -1,0 +1,21 @@
+# Go
+/bin/
+/out/
+/api
+*.exe
+*.test
+*.out
+
+# Env / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+pipelines/.venv/
+pipelines/uv.lock
+
+# OS / IDE
+.DS_Store
+.idea/

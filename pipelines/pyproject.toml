@@ -1,0 +1,18 @@
+[project]
+name = "caregraph-pipelines"
+version = "0.1.0"
+description = "CareGraph ingestion pipelines: web scraping, PDF parsing, and geocoding."
+requires-python = ">=3.12"
+dependencies = [
+    "pdfplumber>=0.11",
+    "beautifulsoup4>=4.12",
+    "playwright>=1.47",
+    "polars>=1.0",
+    "requests>=2.32",
+    "psycopg[binary]>=3.2",
+]
+
+# Treat this as an application (managed deps + venv), not an installable package.
+# Avoids a build backend and its packaging requirements.
+[tool.uv]
+package = false
