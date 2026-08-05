@@ -16,6 +16,10 @@ __pycache__/
 pipelines/.venv/
 pipelines/uv.lock
 
+# Pipeline data (raw downloads & generated outputs; overrides ARE tracked)
+pipelines/data/raw/*.pdf
+pipelines/data/processed/
+
 # OS / IDE
 .DS_Store
 .idea/

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "CareGraph ingestion pipelines: web scraping, PDF parsing, and geocoding."
 requires-python = ">=3.12"
 dependencies = [
+    "pandas>=2.2",
     "pdfplumber>=0.11",
     "beautifulsoup4>=4.12",
     "playwright>=1.47",
