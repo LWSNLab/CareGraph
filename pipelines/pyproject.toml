@@ -13,7 +13,13 @@ dependencies = [
     "psycopg[binary]>=3.2",
 ]
 
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
 # Treat this as an application (managed deps + venv), not an installable package.
 # Avoids a build backend and its packaging requirements.
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
