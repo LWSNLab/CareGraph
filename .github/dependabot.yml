@@ -1,0 +1,50 @@
+version: 2
+
+# Dependency updates. Dependabot alerts and updates are free on private repos
+# too, so this is active from day one.
+#
+# Updates are grouped per ecosystem to avoid a flood of single-dependency PRs;
+# security patches still come through immediately via Dependabot alerts.
+
+updates:
+  # --- GitHub Actions used by our own workflows ------------------------------
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # --- Go API gateway --------------------------------------------------------
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(go)"
+    groups:
+      go-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    # Majors arrive as individual PRs — they deserve a human read.
+
+  # --- Python ingestion pipelines -------------------------------------------
+  - package-ecosystem: uv
+    directory: "/pipelines"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(py)"
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

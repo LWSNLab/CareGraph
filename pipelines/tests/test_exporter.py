@@ -116,7 +116,8 @@ def test_bundesweit_can_be_expanded_to_all_states(exporter):
 
 
 def test_company_insurers_yield_no_links(exporter):
-    assert exporter._parse_bundeslaender("betriebsbezogen (nur für Mitarbeitende wählbar)", False, False) == []
+    company_only = "betriebsbezogen (nur für Mitarbeitende wählbar)"
+    assert exporter._parse_bundeslaender(company_only, False, False) == []
 
 
 def test_duplicates_are_removed(exporter):
