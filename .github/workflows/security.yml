@@ -1,0 +1,99 @@
+name: Security
+
+# Supply-chain and secret checks that work on private repositories at no cost,
+# complementing CodeQL (which needs a public repo or Advanced Security) and
+# Dependabot alerts.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  schedule:
+    # Weekly: new advisories appear for code that has not changed.
+    - cron: "17 5 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  go-vulns:
+    name: Go vulnerabilities (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+      # govulncheck reports only vulnerabilities that are actually reachable
+      # from our code, which keeps the signal-to-noise ratio usable.
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: "1.25"
+          repo-checkout: false
+
+  python-vulns:
+    name: Python vulnerabilities (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pipelines/pyproject.toml"
+
+      - name: Export the resolved dependency set
+        working-directory: pipelines
+        run: uv export --format requirements-txt --all-groups --no-emit-project -o requirements-audit.txt
+
+      - name: Audit dependencies
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: pipelines/requirements-audit.txt
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    env:
+      # Pinned with its published checksum. Dependabot cannot bump a plain
+      # download, so both values must be updated together by hand.
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # scan the whole history, not just the tip
+
+      # The gitleaks *binary* is MIT-licensed and free. The official
+      # gitleaks-action wrapper requires a paid licence for organisations
+      # (LWSNLab is one), so we invoke the CLI directly instead.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+
+      # Exit code 1 means leaks were found, which should fail the job.
+      # --redact keeps any finding out of the public log.
+      - name: Scan git history
+        run: ./gitleaks git . --redact --no-banner --exit-code 1
+
+  dependency-review:
+    name: Dependency review (PR)
+    # Blocks pull requests that introduce known-vulnerable dependencies.
+    # Requires a public repo or Advanced Security, hence the same guard as CodeQL.
+    if: github.event_name == 'pull_request' && (github.event.repository.visibility == 'public' || vars.ENABLE_CODEQL == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v3
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure

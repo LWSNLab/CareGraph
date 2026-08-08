@@ -1,9 +1,11 @@
 # src/gkv_parser
-from pathlib import Path
 import re
+from pathlib import Path
+
 import pandas as pd
 import pdfplumber
 import requests
+
 
 class GKVParser:
     """Parses official GKV statutory health insurance lists (PDF or CSV)."""
@@ -164,7 +166,8 @@ class GKVParser:
         df["name"] = df["name"].str.replace(*wrap_hyphen, regex=True).str.strip()
         df["geoffnet_in"] = df["geoffnet_in"].str.replace(*wrap_hyphen, regex=True).str.strip()
 
-        self.cleaned_df = df[["name", "website", "zusatzbeitrag", "geoffnet_in", "is_bundesweit"]].dropna(subset=["name"])
+        columns = ["name", "website", "zusatzbeitrag", "geoffnet_in", "is_bundesweit"]
+        self.cleaned_df = df[columns].dropna(subset=["name"])
         return self.cleaned_df
 
 

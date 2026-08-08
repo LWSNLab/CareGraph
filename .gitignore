@@ -23,3 +23,6 @@ pipelines/data/processed/
 # OS / IDE
 .DS_Store
 .idea/
+
+# pip-audit export (CI artifact)
+pipelines/requirements-audit.txt

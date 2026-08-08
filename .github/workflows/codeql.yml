@@ -1,0 +1,66 @@
+name: CodeQL
+
+# Static analysis for Go and Python.
+#
+# NOTE ON BILLING: CodeQL is free for public repositories. On a *private* repo
+# it requires GitHub Advanced Security, and without it the job fails. The
+# visibility guard below keeps the pipeline green while CareGraph is still
+# private; the analysis starts by itself the moment the repo goes public
+# (story E5-S1) — or immediately if GHAS is enabled.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Weekly, so newly published CodeQL queries also reach untouched code.
+    - cron: "27 4 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    # Skip on private repos without Advanced Security instead of failing.
+    if: github.event.repository.visibility == 'public' || vars.ENABLE_CODEQL == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      security-events: write   # required to upload results
+      packages: read
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: python
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended adds lower-severity but genuine findings on top
+          # of the default query suite.
+          queries: security-extended
+
+      - name: Autobuild
+        if: matrix.build-mode == 'autobuild'
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

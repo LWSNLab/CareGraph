@@ -1,13 +1,14 @@
 # src/address_scraper.py
 import json
-from pathlib import Path
 import re
 import time
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
+
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 import urllib3
+from bs4 import BeautifulSoup
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -19,7 +20,10 @@ class AddressScraper:
         self.timeout = timeout
         self.delay = delay
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8",
         }
@@ -70,7 +74,7 @@ class AddressScraper:
 
         for candidate in candidates:
             if candidate.exists():
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(candidate, encoding="utf-8") as f:
                     return json.load(f)
 
         print(
@@ -329,11 +333,16 @@ class AddressScraper:
     ) -> dict[str, str]:
         sanitized_domain = self._sanitize_domain(domain)
 
+        def bare_host(value: str) -> str:
+            """Strip protocol and www. so overrides compare on the host alone."""
+            for prefix in ("https://", "http://", "www."):
+                value = value.replace(prefix, "")
+            return value.strip("/")
+
         # 1. Robuster Check gegen manual_overrides
+        clean_target = bare_host(sanitized_domain)
         for override_key, data in self.overrides.items():
-            # Entferne Protokolle und www. für den reinen Domain-Vergleich
-            clean_override = override_key.replace("https://", "").replace("http://", "").replace("www.", "").strip("/")
-            clean_target = sanitized_domain.replace("https://", "").replace("http://", "").replace("www.", "").strip("/")
+            clean_override = bare_host(override_key)
 
             if clean_override in clean_target or clean_target in clean_override:
                 return {

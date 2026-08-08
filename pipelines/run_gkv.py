@@ -11,9 +11,9 @@ Run from the repository root:
 
 import argparse
 
+from pipelines.load.exporter import DataExporter
 from pipelines.parsers.gkv_parser import GKVParser
 from pipelines.scrapers.address_scraper import AddressScraper
-from pipelines.load.exporter import DataExporter
 
 
 def main() -> None:

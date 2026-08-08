@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
 
 # Treat this as an application (managed deps + venv), not an installable package.
 # Avoids a build backend and its packaging requirements.
@@ -23,3 +23,20 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Explicit ruleset so CI and local runs agree regardless of the environment.
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # bugbear
+]
+# Scrapers deliberately swallow every network/parse error and carry on; the
+# run report is what surfaces failures, not an exception per element.
+ignore = ["B904"]
