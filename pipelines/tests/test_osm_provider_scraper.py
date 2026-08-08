@@ -151,6 +151,56 @@ def test_contact_prefixed_tags_are_used_as_fallback():
     assert record.details["phone"] == "030 1"
 
 
+# ------------------------------------------------------- Pflegestützpunkte
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Pflegestützpunkt",
+        "Pflegestützpunkt Steglitz-Zehlendorf",
+        "Heinrich Netzwerk Pflegestützpunkt",
+        "Pflegestuetzpunkt Nord",          # ue transliteration
+        "PFLEGESTÜTZPUNKT MITTE",          # shouting
+    ],
+)
+def test_detects_pflegestuetzpunkt_by_name(name):
+    """Most carry the term only in the name — the tags are unreliable."""
+    element = {"type": "node", "id": 1, "lat": 1.0, "lon": 2.0, "tags": {"name": name}}
+    assert map_element(element).type == "pflegestuetzpunkt"
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        {"social_facility": "ambulatory_care"},   # 14 real cases tagged this way
+        {"social_facility": "outreach"},
+        {"social_facility": "nursing_home"},      # yes, really
+        {},                                       # no facility tag at all
+    ],
+)
+def test_name_wins_over_contradicting_tags(tags):
+    element = {"type": "node", "id": 1, "lat": 1.0, "lon": 2.0,
+               "tags": {"name": "Pflegestützpunkt Mitte", **tags}}
+    assert map_element(element).type == "pflegestuetzpunkt"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LH Dresden Grünpflegestützpunkt Nord",   # green-space depot, real case
+        "Gruenpflegestützpunkt Süd",
+        "Gartenpflegestützpunkt",
+        "Stadtpflegestützpunkt Betriebshof",
+    ],
+)
+def test_maintenance_depots_are_not_pflegestuetzpunkte(name):
+    """'Grünpflegestützpunkt' is municipal groundskeeping, not care."""
+    element = {"type": "node", "id": 1, "lat": 1.0, "lon": 2.0,
+               "tags": {"name": name, "amenity": "parking"}}
+    assert map_element(element) is None
+
+
 # -------------------------------------------------------------------- query
 
 
@@ -159,6 +209,11 @@ def test_query_contains_region_and_returns_centers():
     assert '"name"="Bayern"' in query
     assert '"admin_level"="4"' in query
     assert "out center tags;" in query
+
+
+def test_query_also_fetches_by_name_for_pflegestuetzpunkte():
+    """Many carry no amenity=social_facility and would otherwise be missed."""
+    assert 'Pflegestützpunkt' in OSMProviderScraper.build_query("Bayern")
 
 
 # ------------------------------------------------------------------- report

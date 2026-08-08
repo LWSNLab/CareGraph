@@ -18,6 +18,7 @@ Attribution is mandatory: "© OpenStreetMap contributors (ODbL)".
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -70,6 +71,14 @@ AUDIENCE_REQUIRED_FACILITIES = {"outreach", "advice"}
 
 SENIOR_AUDIENCE = "senior"
 
+# Pflegestützpunkte are barely tagged as `social_facility=advice` in practice —
+# most carry the term only in their name, with inconsistent (or missing) tags.
+# Name matching is therefore the reliable signal for this type.
+PFLEGESTUETZPUNKT_NAME = re.compile(r"pflegest(ü|ue)tzpunkt", re.IGNORECASE)
+
+# ...but "Grünpflegestützpunkt" is a green-space maintenance depot, not care.
+NOT_A_PFLEGESTUETZPUNKT = re.compile(r"(grün|gruen|garten|forst|stadt)pflegest", re.IGNORECASE)
+
 
 class OverpassError(RuntimeError):
     """Overpass could not serve the query (busy, timeout, malformed)."""
@@ -120,6 +129,61 @@ class RunReport:
         )
 
 
+def _build_record(
+    element: dict, provider_type: str, bundesland: str | None
+) -> ProviderRecord | None:
+    """Turn an Overpass element into a ProviderRecord of the given type.
+
+    Returns None for unnamed elements — they carry no value downstream.
+    """
+    tags = element.get("tags") or {}
+    name = (tags.get("name") or "").strip()
+    if not name:
+        return None
+
+    centre = element.get("center") or {}
+    lat = element.get("lat", centre.get("lat"))
+    lon = element.get("lon", centre.get("lon"))
+
+    street = tags.get("addr:street")
+    housenumber = tags.get("addr:housenumber")
+    strasse = " ".join(part for part in (street, housenumber) if part) or None
+
+    details: dict[str, Any] = {
+        "osm_type": element.get("type"),
+        "osm_id": element.get("id"),
+        "social_facility": tags.get("social_facility"),
+        "social_facility:for": tags.get("social_facility:for"),
+        "source": "openstreetmap",
+        "attribution": ATTRIBUTION,
+    }
+    for tag_key, detail_key in (
+        ("phone", "phone"),
+        ("contact:phone", "phone"),
+        ("email", "email"),
+        ("contact:email", "email"),
+        ("opening_hours", "opening_hours"),
+        ("wheelchair", "wheelchair"),
+    ):
+        if tag_key in tags and detail_key not in details:
+            details[detail_key] = tags[tag_key]
+
+    return ProviderRecord(
+        type=provider_type,
+        name=name,
+        ik_nummer=None,  # OSM carries no Institutionskennzeichen
+        parent_organization=tags.get("operator"),
+        website=tags.get("website") or tags.get("contact:website"),
+        strasse=strasse,
+        plz=tags.get("addr:postcode"),
+        ort=tags.get("addr:city"),
+        bundesland=bundesland,
+        lat=float(lat) if lat is not None else None,
+        lon=float(lon) if lon is not None else None,
+        details={key: value for key, value in details.items() if value is not None},
+    )
+
+
 class OSMProviderScraper:
     """Fetches care providers per federal state from the Overpass API."""
 
@@ -141,13 +205,18 @@ class OSMProviderScraper:
 
     @staticmethod
     def build_query(bundesland: str, timeout: int = 180) -> str:
-        """Overpass QL for all care-related facilities in one federal state."""
+        """Overpass QL for all care-related facilities in one federal state.
+
+        The name clause is not redundant: most Pflegestützpunkte carry no
+        ``amenity=social_facility`` at all and would otherwise never be fetched.
+        """
         return f"""
 [out:json][timeout:{timeout}];
 area["name"="{bundesland}"]["admin_level"="4"]->.a;
 (
   nwr(area.a)["amenity"="social_facility"];
   nwr(area.a)["healthcare"="nurse"];
+  nwr(area.a)["name"~"Pflegestützpunkt",i];
 );
 out center tags;
 """.strip()
@@ -189,6 +258,7 @@ out center tags;
         Pure function — the unit tests exercise the mapping without network.
         """
         tags = element.get("tags") or {}
+        name = (tags.get("name") or "").strip()
 
         facility = tags.get("social_facility")
         provider_type = TYPE_MAPPING.get(facility)
@@ -197,6 +267,15 @@ out center tags;
         is_nurse = provider_type is None and tags.get("healthcare") == "nurse"
         if is_nurse:
             provider_type = "pflegedienst_ambulant"
+
+        # A name-identified Pflegestützpunkt wins over whatever the tags claim:
+        # in the wild they appear as ambulatory_care, outreach, nursing_home or
+        # with no facility tag at all.
+        named_stuetzpunkt = bool(
+            PFLEGESTUETZPUNKT_NAME.search(name) and not NOT_A_PFLEGESTUETZPUNKT.search(name)
+        )
+        if named_stuetzpunkt:
+            return _build_record(element, "pflegestuetzpunkt", bundesland)
 
         if provider_type is None:
             return None
@@ -216,51 +295,7 @@ out center tags;
             if facility in AUDIENCE_REQUIRED_FACILITIES:
                 return None  # generic social work, no senior context
 
-        name = (tags.get("name") or "").strip()
-        if not name:
-            return None  # unnamed facilities are not useful downstream
-
-        centre = element.get("center") or {}
-        lat = element.get("lat", centre.get("lat"))
-        lon = element.get("lon", centre.get("lon"))
-
-        street = tags.get("addr:street")
-        housenumber = tags.get("addr:housenumber")
-        strasse = " ".join(p for p in (street, housenumber) if p) or None
-
-        details = {
-            "osm_type": element.get("type"),
-            "osm_id": element.get("id"),
-            "social_facility": facility,
-            "social_facility:for": tags.get("social_facility:for"),
-            "source": "openstreetmap",
-            "attribution": ATTRIBUTION,
-        }
-        for tag_key, detail_key in (
-            ("phone", "phone"),
-            ("contact:phone", "phone"),
-            ("email", "email"),
-            ("contact:email", "email"),
-            ("opening_hours", "opening_hours"),
-            ("wheelchair", "wheelchair"),
-        ):
-            if tag_key in tags and detail_key not in details:
-                details[detail_key] = tags[tag_key]
-
-        return ProviderRecord(
-            type=provider_type,
-            name=name,
-            ik_nummer=None,  # OSM carries no Institutionskennzeichen
-            parent_organization=tags.get("operator"),
-            website=tags.get("website") or tags.get("contact:website"),
-            strasse=strasse,
-            plz=tags.get("addr:postcode"),
-            ort=tags.get("addr:city"),
-            bundesland=bundesland,
-            lat=float(lat) if lat is not None else None,
-            lon=float(lon) if lon is not None else None,
-            details={k: v for k, v in details.items() if v is not None},
-        )
+        return _build_record(element, provider_type, bundesland)
 
     # -------------------------------------------------------------- fetching
 
