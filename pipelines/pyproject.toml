@@ -10,7 +10,7 @@ dependencies = [
     "playwright>=1.47",
     "polars>=1.0",
     "requests>=2.32",
-    "psycopg[binary]>=3.2",
+    "psycopg[binary]>=3.3.4",
 ]
 
 [dependency-groups]
