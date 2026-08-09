@@ -53,6 +53,7 @@ class LoadReport:
     skipped: list[str] = field(default_factory=list)
     state_links: int = 0
     history_rows: int = 0
+    rekeyed: int = 0        # rows migrated from a name key to an IK key
 
     @property
     def ok(self) -> bool:
@@ -62,7 +63,7 @@ class LoadReport:
         return (
             f"inserted={self.inserted} updated={self.updated} "
             f"skipped={len(self.skipped)} state_links={self.state_links} "
-            f"history_rows={self.history_rows}"
+            f"history_rows={self.history_rows} rekeyed={self.rekeyed}"
         )
 
 
@@ -201,8 +202,32 @@ class PostgresLoader:
                         continue
 
                     ik = insurer.get("ik_nummer")
-                    # IK is the better key; fall back to the name until E1-S6 lands.
+                    # IK is the stable key; the name is the fallback for the
+                    # few insurers no Kostenträgerdatei lists (E1-S6).
                     source_id = f"ik:{ik}" if ik else f"gkv:{name}"
+
+                    # An insurer already in the table may carry an older key:
+                    # the name key from before IKs were resolved, or a previous
+                    # IK (the official list corrects these between versions).
+                    # Rewrite in place — otherwise the upsert below inserts a
+                    # second row and orphans the first.
+                    if ik:
+                        cur.execute(
+                            """
+                            UPDATE care_infrastructure
+                               SET source_id = %(new)s
+                             WHERE type = 'krankenkasse'
+                               AND name = %(name)s
+                               AND source_id <> %(new)s
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM care_infrastructure existing
+                                    WHERE existing.source_id = %(new)s
+                               )
+                            """,
+                            {"new": source_id, "name": name},
+                        )
+                        if cur.rowcount:
+                            report.rekeyed += cur.rowcount
 
                     details = {
                         "source": "gkv-spitzenverband",
