@@ -38,16 +38,34 @@ def load_providers(loader: PostgresLoader, path: Path):
     return loader.load_providers(records)
 
 
-def load_insurers(loader: PostgresLoader, pdf: Path, gueltig_ab: date, expand: bool):
+def load_insurers(
+    loader: PostgresLoader, pdf: Path, gueltig_ab: date, expand: bool, with_ik: bool = True
+):
     # Imported lazily so the provider path does not need pdfplumber.
     from pipelines.parsers.gkv_parser import GKVParser
 
     df = GKVParser(pdf, output_filename=pdf.name).parse_pdf()
     print(f"📥 {len(df)} insurers parsed from {pdf}")
 
+    # Resolve Institutionskennzeichen so rows are keyed on the IK rather than a
+    # name that can change between publications (story E1-S6).
+    ik_by_name: dict[str, str] = {}
+    if with_ik:
+        from pipelines.parsers.ik_verzeichnis import IKVerzeichnis
+
+        verzeichnis = IKVerzeichnis()
+        verzeichnis.load_all()
+        report = verzeichnis.match_all(list(df["name"]))
+        ik_by_name = report.matched
+        print(f"🔑 IK matching: {report.summary()}")
+        if report.unmatched:
+            # Never silent: these keep their name-based key.
+            print(f"   without IK: {', '.join(report.unmatched)}")
+
     insurers = []
     for _, row in df.iterrows():
         insurers.append({
+            "ik_nummer": ik_by_name.get(row["name"]),
             "name": row["name"],
             "website": row["website"],
             "zusatzbeitrag": row["zusatzbeitrag"],
@@ -74,6 +92,8 @@ def main() -> int:
                     help="Publication date of the insurer list (YYYY-MM-DD)")
     ap.add_argument("--expand-bundesweit", action="store_true",
                     help="Link nationwide insurers to all 16 states")
+    ap.add_argument("--no-ik", action="store_true",
+                    help="Skip IK enrichment (avoids the network round-trip)")
     # INGEST_DATABASE_URL first: DATABASE_URL belongs to the read-only API role,
     # and loading with it would fail on the first write.
     ap.add_argument(
@@ -91,7 +111,8 @@ def main() -> int:
     if args.what == "providers":
         report = load_providers(loader, args.input)
     else:
-        report = load_insurers(loader, args.pdf, args.gueltig_ab, args.expand_bundesweit)
+        report = load_insurers(loader, args.pdf, args.gueltig_ab,
+                               args.expand_bundesweit, with_ik=not args.no_ik)
 
     print(f"✅ {report.summary()}")
     if not report.ok:
