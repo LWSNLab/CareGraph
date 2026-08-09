@@ -26,28 +26,12 @@ from typing import Any
 
 import requests
 
+from pipelines.common import BUNDESLAENDER
+
 log = logging.getLogger(__name__)
 
 ATTRIBUTION = "© OpenStreetMap contributors (ODbL)"
 
-BUNDESLAENDER = (
-    "Baden-Württemberg",
-    "Bayern",
-    "Berlin",
-    "Brandenburg",
-    "Bremen",
-    "Hamburg",
-    "Hessen",
-    "Mecklenburg-Vorpommern",
-    "Niedersachsen",
-    "Nordrhein-Westfalen",
-    "Rheinland-Pfalz",
-    "Saarland",
-    "Sachsen",
-    "Sachsen-Anhalt",
-    "Schleswig-Holstein",
-    "Thüringen",
-)
 
 # OSM social_facility value -> CareGraph provider_type.
 # Derived from the actual tag distribution in German OSM data, not guessed.

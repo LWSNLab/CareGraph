@@ -21,7 +21,8 @@ from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
-from pipelines.scrapers.osm_provider_scraper import BUNDESLAENDER, OSMProviderScraper
+from pipelines.common import BUNDESLAENDER
+from pipelines.scrapers.osm_provider_scraper import OSMProviderScraper
 
 log = logging.getLogger("pipelines.run_providers")
 
