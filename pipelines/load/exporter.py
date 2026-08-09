@@ -1,8 +1,10 @@
-# src/exporter.py
 import json
 from pathlib import Path
 
 import pandas as pd
+
+from pipelines.common import BUNDESLAENDER as _BUNDESLAENDER
+from pipelines.common import parse_bundeslaender as _parse_bundeslaender
 
 
 class DataExporter:
@@ -63,48 +65,18 @@ class DataExporter:
             return "NULL"
         return "TRUE" if bool(val) else "FALSE"
 
-    # Die 16 deutschen Bundesländer (kanonische Schreibweise = Stammdaten).
-    BUNDESLAENDER = [
-        "Baden-Württemberg",
-        "Bayern",
-        "Berlin",
-        "Brandenburg",
-        "Bremen",
-        "Hamburg",
-        "Hessen",
-        "Mecklenburg-Vorpommern",
-        "Niedersachsen",
-        "Nordrhein-Westfalen",
-        "Rheinland-Pfalz",
-        "Saarland",
-        "Sachsen",
-        "Sachsen-Anhalt",
-        "Schleswig-Holstein",
-        "Thüringen",
-    ]
+    # Canonical master data — shared with the Postgres loader so the two cannot
+    # drift apart (see pipelines/common/normalize.py).
+    BUNDESLAENDER = list(_BUNDESLAENDER)
 
     def _parse_bundeslaender(
         self, geoffnet_in, is_bundesweit: bool, expand_bundesweit: bool
     ) -> list[str]:
         """Zerlegt das 'geöffnet in'-Feld in eine Liste kanonischer Bundesländer.
 
-        - 'bundesweit' ergibt (je nach expand_bundesweit) alle 16 oder keine
-          Links – die Information steckt ohnehin im is_bundesweit-Flag.
-        - 'betriebsbezogen …' (Werks-BKK) ergibt keine Links.
-        - Zusätze wie 'Schleswig-Holstein branchenbezogen' werden trotzdem dem
-          Bundesland zugeordnet (längster Präfix-Treffer, damit 'Sachsen' nicht
-          fälschlich 'Sachsen-Anhalt' schluckt)."""
-        if expand_bundesweit and bool(is_bundesweit):
-            return list(self.BUNDESLAENDER)
-
-        by_len = sorted(self.BUNDESLAENDER, key=len, reverse=True)
-        result: list[str] = []
-        for token in str(geoffnet_in).split(","):
-            token = token.strip()
-            match = next((b for b in by_len if token.startswith(b)), None)
-            if match and match not in result:
-                result.append(match)
-        return result
+        Delegiert an die gemeinsame Normalisierung; siehe dort für die Regeln
+        zu 'bundesweit', Werks-BKKs und mehrteiligen Ländernamen."""
+        return _parse_bundeslaender(geoffnet_in, is_bundesweit, expand_bundesweit)
 
     def _rls_block(self, table_name: str) -> str:
         """Row-Level-Security mit öffentlicher Leseregel für eine Tabelle."""

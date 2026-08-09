@@ -15,8 +15,26 @@ logs: ## Tail container logs
 ps: ## Show running services
 	docker compose ps
 
-migrate: ## Apply migrations to the running db
-	docker compose exec -T db psql -U $${POSTGRES_USER:-caregraph} -d $${POSTGRES_DB:-caregraph} < db/migrations/0001_init.sql
+migrate: ## Apply ALL migrations to the running db, in order
+	@for m in db/migrations/*.sql; do \
+		echo "applying $$m"; \
+		docker compose exec -T db psql -U $${POSTGRES_USER:-caregraph} -d $${POSTGRES_DB:-caregraph} -v ON_ERROR_STOP=1 -q < $$m || exit 1; \
+	done
+
+db-roles-dev: ## Set throwaway passwords for the least-privilege roles (LOCAL ONLY)
+	@docker compose exec -T db psql -U $${POSTGRES_USER:-caregraph} -d $${POSTGRES_DB:-caregraph} -q -c \
+		"ALTER ROLE caregraph_ingest WITH PASSWORD 'devingest'; ALTER ROLE caregraph_api WITH PASSWORD 'devapi';"
+	@echo "dev passwords set — never use these outside a local container"
+
+load-providers: ## Load scraped providers into PostGIS
+	uv run --project pipelines python -m pipelines.run_load providers
+
+load-insurers: ## Load the GKV insurer list into PostGIS
+	uv run --project pipelines python -m pipelines.run_load insurers
+
+test-db: ## Run the Python suite including database integration tests
+	CAREGRAPH_TEST_DSN=$${DATABASE_URL:-postgres://caregraph:caregraph@localhost:5433/caregraph?sslmode=disable} \
+		uv run --project pipelines pytest pipelines/tests -q
 
 tidy: ## Resolve Go dependencies (creates go.sum)
 	go mod tidy

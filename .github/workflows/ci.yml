@@ -53,6 +53,27 @@ jobs:
     defaults:
       run:
         working-directory: pipelines
+
+    # PostGIS for the loader's integration tests. Without it they skip, which
+    # would leave the database code effectively untested in CI.
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: caregraph
+          POSTGRES_PASSWORD: caregraph
+          POSTGRES_DB: caregraph
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U caregraph -d caregraph"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      CAREGRAPH_TEST_DSN: postgres://caregraph:caregraph@localhost:5432/caregraph?sslmode=disable
+
     steps:
       - uses: actions/checkout@v7
 
@@ -67,6 +88,19 @@ jobs:
 
       - name: Lint
         run: uv run ruff check .
+
+      # A service container does not run docker-entrypoint-initdb.d, so the
+      # migrations have to be applied explicitly here.
+      - name: Apply database migrations
+        working-directory: ${{ github.workspace }}
+        env:
+          PGPASSWORD: caregraph
+        run: |
+          set -euo pipefail
+          for migration in db/migrations/*.sql; do
+            echo "applying $migration"
+            psql -h localhost -U caregraph -d caregraph -v ON_ERROR_STOP=1 -f "$migration"
+          done
 
       - name: Test
         # Run from the repo root so `pipelines` imports as a package.

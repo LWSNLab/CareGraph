@@ -1,12 +1,16 @@
 """Load stage — write the enriched dataset to its destination.
 
-`exporter.py` is the ported GKV prototype exporter. It emits CSV/JSON and an
-idempotent SQL upsert script for a STANDALONE ``krankenkassen`` schema (the
-Supabase prototype), incl. a normalized ``bundeslaender`` + ``krankenkasse_bundesland``.
+`postgres_loader.py` is the real destination (story E1-S4): it upserts records
+into CareGraph's unified `care_infrastructure` schema plus its satellites
+(`krankenkasse_bundesland`, `zusatzbeitrag_historie`). The database is the
+single source of truth; the API reads from it and never scrapes on request.
 
-⚠️ This is NOT yet CareGraph's unified schema. CareGraph stores everything in
-``care_infrastructure`` (+ ``krankenkasse_bundesland``, ``zusatzbeitrag_historie``)
-— see db/migrations/0001_init.sql. Mapping insurers into that schema (type =
-'krankenkasse', address → location via geocoding, zusatzbeitrag → history) and a
-direct Postgres load is the follow-up integration step.
+Idempotency is the point — a scheduled re-run updates rows instead of
+duplicating them, keyed on the source-namespaced `source_id`
+(`osm:node/123`, `ik:108616568`).
+
+`exporter.py` is the earlier prototype exporter. It still emits CSV/JSON and an
+SQL script for a *standalone* `krankenkassen` schema, which is useful for
+sharing snapshots or seeding a Supabase prototype, but it is not the platform's
+storage path.
 """

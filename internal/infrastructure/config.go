@@ -18,7 +18,7 @@ type Config struct {
 func LoadConfig() Config {
 	return Config{
 		HTTPAddr:     env("CAREGRAPH_HTTP_ADDR", ":8080"),
-		DatabaseURL:  env("DATABASE_URL", "postgres://caregraph:caregraph@localhost:5432/caregraph?sslmode=disable"),
+		DatabaseURL:  env("DATABASE_URL", "postgres://caregraph:caregraph@localhost:5433/caregraph?sslmode=disable"),
 		TypesenseURL: env("TYPESENSE_URL", "http://localhost:8108"),
 		TypesenseKey: env("TYPESENSE_API_KEY", ""),
 		RedisAddr:    env("REDIS_ADDR", "localhost:6379"),
