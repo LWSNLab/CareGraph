@@ -2,15 +2,20 @@
 // database/PostGIS connection. It has no domain logic of its own.
 package infrastructure
 
-import "os"
+import (
+	"log/slog"
+	"os"
+	"strings"
+)
 
 // Config holds runtime configuration, sourced from environment variables.
 type Config struct {
-	HTTPAddr     string // address the API listens on, e.g. ":8080"
-	DatabaseURL  string // PostgreSQL/PostGIS DSN
-	TypesenseURL string // Typesense base URL
-	TypesenseKey string // Typesense API key
-	RedisAddr    string // Redis address for rate limiting
+	HTTPAddr     string     // address the API listens on, e.g. ":8080"
+	DatabaseURL  string     // PostgreSQL/PostGIS DSN
+	TypesenseURL string     // Typesense base URL
+	TypesenseKey string     // Typesense API key
+	RedisAddr    string     // Redis address for rate limiting
+	LogLevel     slog.Level // minimum level written to stderr
 }
 
 // LoadConfig reads configuration from the environment, applying sane defaults
@@ -22,6 +27,7 @@ func LoadConfig() Config {
 		TypesenseURL: env("TYPESENSE_URL", "http://localhost:8108"),
 		TypesenseKey: env("TYPESENSE_API_KEY", ""),
 		RedisAddr:    env("REDIS_ADDR", "localhost:6379"),
+		LogLevel:     logLevel(env("CAREGRAPH_LOG_LEVEL", "info")),
 	}
 }
 
@@ -30,4 +36,20 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// logLevel maps a name to a slog level. An unrecognised value falls back to
+// info rather than failing startup: a typo in a log setting should not keep the
+// service down.
+func logLevel(name string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }

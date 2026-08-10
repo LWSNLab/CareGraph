@@ -147,6 +147,38 @@ func TestParseNearParamsRejects(t *testing.T) {
 	}
 }
 
+func TestValidateIK(t *testing.T) {
+	valid := []string{"100171007", "000000000", "999999999"}
+	for _, ik := range valid {
+		if err := ValidateIK(ik); err != nil {
+			t.Errorf("ValidateIK(%q) = %v, want nil", ik, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"12345678",   // too short
+		"1234567890", // too long
+		"12345678a",  // trailing letter
+		"a12345678",  // leading letter
+		"123 456789", // space
+		"123456789 ", // trailing space
+		"+123456789", // sign
+		"12345678.9", // decimal point
+		"१२३४५६७८९",  // Devanagari digits — \d would accept these, [0-9] must not
+	}
+	for _, ik := range invalid {
+		err := ValidateIK(ik)
+		if err == nil {
+			t.Errorf("ValidateIK(%q) = nil, want an error", ik)
+			continue
+		}
+		if pe, ok := err.(*ParamError); !ok || pe.Param != "ik_nummer" {
+			t.Errorf("ValidateIK(%q) returned %v, want a ParamError on ik_nummer", ik, err)
+		}
+	}
+}
+
 func TestAllTypesAreValid(t *testing.T) {
 	for _, tp := range AllTypes() {
 		if !tp.Valid() {

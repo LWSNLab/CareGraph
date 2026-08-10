@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
 	"testing"
@@ -110,6 +111,105 @@ func names(ps []Provider) []string {
 		out[i] = p.Name
 	}
 	return out
+}
+
+func TestGetByIKIntegration(t *testing.T) {
+	pool := testPool(t)
+	repo := NewPostgresRepository(pool)
+	ctx := context.Background()
+
+	// An IK outside the official ranges, so it cannot collide with the 91 real
+	// ones even when the test runs against the loaded database.
+	const testIK = "999999901"
+
+	clean := func() {
+		if _, err := pool.Exec(ctx,
+			`DELETE FROM care_infrastructure WHERE source_id LIKE $1`, fixturePrefix+"%",
+		); err != nil {
+			t.Fatalf("cleanup: %v", err)
+		}
+	}
+	clean()
+	t.Cleanup(clean)
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO care_infrastructure
+		    (source_id, ik_nummer, type, name, parent_organization, website,
+		     strasse, plz, ort, bundesland, details)
+		VALUES ($1, $2, 'krankenkasse'::provider_type, $3, $4, $5,
+		        $6, $7, $8, $9, $10::jsonb)`,
+		fixturePrefix+"ik", testIK, "Fixture Krankenkasse", "Fixture Verband",
+		"https://example.invalid", "Teststraße 1", "10115", "Testort", "Berlin",
+		`{"seeded": true, "is_bundesweit": true}`)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	t.Run("returns the entity with every field mapped", func(t *testing.T) {
+		p, err := repo.GetByIK(ctx, testIK)
+		if err != nil {
+			t.Fatalf("GetByIK: %v", err)
+		}
+		if p == nil {
+			t.Fatal("got nil, want the seeded row")
+		}
+		if p.IKNummer == nil || *p.IKNummer != testIK {
+			t.Errorf("ik_nummer = %v, want %q", p.IKNummer, testIK)
+		}
+		if p.Type != TypeKrankenkasse || p.Name != "Fixture Krankenkasse" {
+			t.Errorf("type=%q name=%q", p.Type, p.Name)
+		}
+		if p.ParentOrganization == nil || *p.ParentOrganization != "Fixture Verband" {
+			t.Errorf("parent_organization = %v", p.ParentOrganization)
+		}
+		if p.Address.PostalCode != "10115" || p.Address.City != "Testort" || p.Address.State != "Berlin" {
+			t.Errorf("address = %+v", p.Address)
+		}
+		if p.Details["seeded"] != true {
+			t.Errorf("details = %v", p.Details)
+		}
+		// No reference point in a direct lookup, so no distance.
+		if p.DistanceKm != nil {
+			t.Errorf("distance_km = %v, want nil", *p.DistanceKm)
+		}
+		if p.ID == "" {
+			t.Error("id is empty")
+		}
+	})
+
+	t.Run("unknown IK is (nil, nil), not an error", func(t *testing.T) {
+		// pgx.ErrNoRows must be translated, or the handler answers 500 for a
+		// simple miss.
+		p, err := repo.GetByIK(ctx, "999999902")
+		if err != nil {
+			t.Fatalf("GetByIK: %v", err)
+		}
+		if p != nil {
+			t.Errorf("got %+v, want nil", p)
+		}
+	})
+
+	t.Run("real insurers are addressable", func(t *testing.T) {
+		var realIK string
+		err := pool.QueryRow(ctx,
+			`SELECT ik_nummer FROM care_infrastructure
+			  WHERE ik_nummer IS NOT NULL AND source_id NOT LIKE $1
+			  ORDER BY ik_nummer LIMIT 1`, fixturePrefix+"%").Scan(&realIK)
+		if err != nil {
+			t.Skipf("no loaded insurer to look up (%v)", err)
+		}
+
+		p, err := repo.GetByIK(ctx, realIK)
+		if err != nil {
+			t.Fatalf("GetByIK(%s): %v", realIK, err)
+		}
+		if p == nil {
+			t.Fatalf("IK %s is in the table but the lookup returned nothing", realIK)
+		}
+		if err := ValidateIK(realIK); err != nil {
+			t.Errorf("stored IK %q fails the endpoint's own validation: %v", realIK, err)
+		}
+	})
 }
 
 func TestNearIntegration(t *testing.T) {
@@ -227,6 +327,21 @@ func TestNearIntegration(t *testing.T) {
 		}
 		if edge.Details["seeded"] != true {
 			t.Errorf("details = %v, want the seeded JSONB", edge.Details)
+		}
+	})
+
+	t.Run("query timeout is surfaced, not swallowed", func(t *testing.T) {
+		// An already-expired context must come back as DeadlineExceeded so the
+		// handler can answer 504 instead of a generic 500.
+		expired, cancel := context.WithTimeout(ctx, 0)
+		defer cancel()
+
+		_, err := repo.Near(expired, NearParams{Lat: 0, Lng: 0, RadiusKm: 10, Limit: 10})
+		if err == nil {
+			t.Fatal("expected an error from an expired context")
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("error = %v, want it to wrap context.DeadlineExceeded", err)
 		}
 	})
 
