@@ -25,6 +25,8 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from pipelines.common import normalize_website
+
 log = logging.getLogger(__name__)
 
 # Columns updated on conflict. `source_id` is the key and `created_at` must
@@ -43,6 +45,13 @@ _UPSERT_COLUMNS = (
     "scraping_status",
 )
 
+# Columns an update must not blank out. `ik_nummer` comes from a network
+# enrichment step (E1-S6); when that step degrades, the record arrives without
+# an IK, and `ik_nummer = EXCLUDED.ik_nummer` would erase what an earlier run
+# had resolved. Until the insurer key stopped flapping this was invisible,
+# because a run without an IK inserted a second row instead of updating.
+_PRESERVE_IF_NULL = frozenset({"ik_nummer"})
+
 
 @dataclass
 class LoadReport:
@@ -54,17 +63,26 @@ class LoadReport:
     state_links: int = 0
     history_rows: int = 0
     rekeyed: int = 0        # rows migrated from a name key to an IK key
+    key_preserved: int = 0  # rows matched by name because this run had no IK
 
     @property
     def ok(self) -> bool:
         return not self.skipped
 
     def summary(self) -> str:
-        return (
-            f"inserted={self.inserted} updated={self.updated} "
-            f"skipped={len(self.skipped)} state_links={self.state_links} "
-            f"history_rows={self.history_rows} rekeyed={self.rekeyed}"
-        )
+        parts = [
+            f"inserted={self.inserted}",
+            f"updated={self.updated}",
+            f"skipped={len(self.skipped)}",
+            f"state_links={self.state_links}",
+            f"history_rows={self.history_rows}",
+            f"rekeyed={self.rekeyed}",
+        ]
+        # Only shown when it happened: a non-zero value means IK enrichment came
+        # back thinner than the database already knew about.
+        if self.key_preserved:
+            parts.append(f"key_preserved={self.key_preserved}")
+        return " ".join(parts)
 
 
 class PostgresLoader:
@@ -86,9 +104,12 @@ class PostgresLoader:
         geometry construction; NULL coordinates yield a NULL location rather
         than a bogus point at (0, 0).
         """
-        assignments = ",\n            ".join(
-            f"{col} = EXCLUDED.{col}" for col in _UPSERT_COLUMNS
-        )
+        def assignment(col: str) -> str:
+            if col in _PRESERVE_IF_NULL:
+                return f"{col} = COALESCE(EXCLUDED.{col}, care_infrastructure.{col})"
+            return f"{col} = EXCLUDED.{col}"
+
+        assignments = ",\n            ".join(assignment(col) for col in _UPSERT_COLUMNS)
         return f"""
         INSERT INTO care_infrastructure (
             source_id, {', '.join(_UPSERT_COLUMNS)}, location
@@ -165,7 +186,7 @@ class PostgresLoader:
             "type": get("type"),
             "name": name,
             "parent_organization": get("parent_organization"),
-            "website": get("website"),
+            "website": normalize_website(get("website")),
             "strasse": get("strasse"),
             "plz": get("plz"),
             "ort": get("ort"),
@@ -202,32 +223,7 @@ class PostgresLoader:
                         continue
 
                     ik = insurer.get("ik_nummer")
-                    # IK is the stable key; the name is the fallback for the
-                    # few insurers no Kostenträgerdatei lists (E1-S6).
-                    source_id = f"ik:{ik}" if ik else f"gkv:{name}"
-
-                    # An insurer already in the table may carry an older key:
-                    # the name key from before IKs were resolved, or a previous
-                    # IK (the official list corrects these between versions).
-                    # Rewrite in place — otherwise the upsert below inserts a
-                    # second row and orphans the first.
-                    if ik:
-                        cur.execute(
-                            """
-                            UPDATE care_infrastructure
-                               SET source_id = %(new)s
-                             WHERE type = 'krankenkasse'
-                               AND name = %(name)s
-                               AND source_id <> %(new)s
-                               AND NOT EXISTS (
-                                   SELECT 1 FROM care_infrastructure existing
-                                    WHERE existing.source_id = %(new)s
-                               )
-                            """,
-                            {"new": source_id, "name": name},
-                        )
-                        if cur.rowcount:
-                            report.rekeyed += cur.rowcount
+                    source_id = self._resolve_insurer_key(cur, name, ik, report)
 
                     details = {
                         "source": "gkv-spitzenverband",
@@ -241,7 +237,7 @@ class PostgresLoader:
                         "type": "krankenkasse",
                         "name": name,
                         "parent_organization": None,
-                        "website": insurer.get("website"),
+                        "website": normalize_website(insurer.get("website")),
                         "strasse": insurer.get("strasse") or None,
                         "plz": insurer.get("plz") or None,
                         "ort": insurer.get("ort") or None,
@@ -268,6 +264,78 @@ class PostgresLoader:
 
         log.info("insurers loaded: %s", report.summary())
         return report
+
+    @staticmethod
+    def _resolve_insurer_key(cur, name: str, ik: str | None, report: LoadReport) -> str:
+        """Pick the `source_id` to upsert this insurer on.
+
+        The IK is the identifier worth keying on — it survives renames — but it
+        arrives from a network enrichment step that can fail. Deriving the key
+        directly from it means the key changes whenever that step flaps, and a
+        changed key makes the upsert miss and insert a duplicate instead.
+        Observed on 2026-08-10: a run whose IK coverage fell from 91/92 to 75/92
+        silently added 16 duplicate insurers and still exited 0.
+
+        So the preferred key is only used when nothing better is already stored:
+        an insurer already in the table keeps the key it has, unless this run can
+        upgrade it to an IK.
+        """
+        preferred = f"ik:{ik}" if ik else f"gkv:{name}"
+
+        cur.execute(
+            "SELECT 1 FROM care_infrastructure WHERE source_id = %s", (preferred,)
+        )
+        if cur.fetchone():
+            return preferred
+
+        # Not under the preferred key — is this insurer stored under another one?
+        # Prefer an IK-keyed row if several somehow share the name.
+        cur.execute(
+            """
+            SELECT source_id FROM care_infrastructure
+             WHERE type = 'krankenkasse' AND name = %s
+             ORDER BY (source_id LIKE 'ik:%%') DESC, source_id
+             LIMIT 1
+            """,
+            (name,),
+        )
+        existing = cur.fetchone()
+        if existing is None:
+            return preferred        # genuinely new insurer
+
+        current = existing["source_id"]
+
+        if ik:
+            # Upgrade a name key to an IK, or follow a corrected IK — the
+            # official list does revise these between publications.
+            cur.execute(
+                """
+                UPDATE care_infrastructure SET source_id = %(new)s
+                 WHERE type = 'krankenkasse' AND name = %(name)s AND source_id = %(old)s
+                """,
+                {"new": preferred, "name": name, "old": current},
+            )
+            report.rekeyed += cur.rowcount
+            return preferred
+
+        # No IK this run, but the row exists. Keep its key: downgrading to a name
+        # key would insert a second row and orphan the history attached to the
+        # first. The enrichment failing is not a reason to reshape the data.
+        report.key_preserved += 1
+        log.warning(
+            "no IK resolved for %r this run; keeping existing key %s", name, current
+        )
+        return current
+
+    def count_insurers_with_ik(self) -> int:
+        """How many stored insurers already carry an IK — the regression baseline."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) AS n FROM care_infrastructure "
+                    " WHERE type = 'krankenkasse' AND ik_nummer IS NOT NULL"
+                )
+                return cur.fetchone()["n"]
 
     @staticmethod
     def _sync_states(cur, insurer_id: str, states: Sequence[str]) -> int:
