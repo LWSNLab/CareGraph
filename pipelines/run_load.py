@@ -24,7 +24,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from pipelines.common import parse_bundeslaender
+from pipelines.common import parse_bundeslaender, use_system_trust_store
 from pipelines.load.postgres_loader import PostgresLoader
 
 log = logging.getLogger("pipelines.run_load")
@@ -78,24 +78,37 @@ def load_insurers(
         from pipelines.parsers.ik_verzeichnis import IKVerzeichnis
 
         verzeichnis = IKVerzeichnis()
-        verzeichnis.load_all()
+        directory = verzeichnis.load_all()
         report = verzeichnis.match_all(list(df["name"]))
         ik_by_name = report.matched
+
+        print(f"📚 IK directory: {directory.summary()}")
+        if directory.failed:
+            # The reason coverage is low, stated next to the number, so nobody
+            # has to correlate it with a warning further up the log.
+            for source in directory.failed:
+                print(f"   ⚠️  unavailable: {source.name} — {source.error}")
+
         print(f"🔑 IK matching: {report.summary()}")
         if report.unmatched:
             # Never silent: these keep whatever key they already have.
             print(f"   without IK: {', '.join(report.unmatched)}")
 
         # Stop before writing if the enrichment came back thinner than what is
-        # already stored. A source outage (an unreachable Kostenträgerdatei, a
-        # moved Schlüsselverzeichnis) otherwise reshapes good data quietly, and
-        # a scheduled run would report success while doing it.
+        # already stored. A source outage otherwise reshapes good data quietly,
+        # and a scheduled run would report success while doing it.
         known = loader.count_insurers_with_ik()
         if known and len(ik_by_name) < known and not allow_ik_regression:
+            cause = (
+                " Cause: " + "; ".join(f"{s.name} ({s.error})" for s in directory.failed)
+                if directory.failed
+                else " All sources loaded, so the drop is in the data, not the plumbing."
+            )
             raise IKRegression(
                 f"resolved {len(ik_by_name)} IKs but the database already holds "
-                f"{known}; refusing to write. Check the IK sources are reachable, "
-                f"or pass --allow-ik-regression if the drop is real."
+                f"{known}; refusing to write.{cause} Pass --allow-ik-regression to "
+                f"write anyway — stored IKs are preserved, so this is safe when the "
+                f"cause is a source outage rather than a real change."
             )
 
     insurers = []
@@ -146,6 +159,9 @@ def main() -> int:
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)-7s %(message)s")
+    # Before any network call: on a machine behind a TLS-inspecting proxy the
+    # IK sources are otherwise unreachable and coverage silently drops.
+    use_system_trust_store()
 
     loader = PostgresLoader(args.dsn)
     try:

@@ -1,5 +1,6 @@
 # src/address_scraper.py
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -9,6 +10,8 @@ import pandas as pd
 import requests
 import urllib3
 from bs4 import BeautifulSoup
+
+log = logging.getLogger(__name__)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -289,6 +292,12 @@ class AddressScraper:
                     self._https_dead.add(host)  # https hängt -> künftig http
                 continue
             except Exception:
+                # Broad on purpose: this loop walks several URL variants and any
+                # of them may fail in an unforeseen way without that being an
+                # error — a later attempt may still succeed. Logged with the
+                # traceback at DEBUG so `--verbose` can explain a host that
+                # never resolves, instead of failing silently.
+                log.debug("fetch attempt failed: %s", target, exc_info=True)
                 continue
         return None
 
