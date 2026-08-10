@@ -3,7 +3,6 @@ package provider
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -25,26 +24,19 @@ func (h *Handler) Health(c *gin.Context) {
 
 // Near handles GET /v1/infrastructure/near — spatial radius search.
 func (h *Handler) Near(c *gin.Context) {
-	lat, err1 := strconv.ParseFloat(c.Query("lat"), 64)
-	lng, err2 := strconv.ParseFloat(c.Query("lng"), 64)
-	if err1 != nil || err2 != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid latitude or longitude value"})
+	params, err := ParseNearParams(c.Request.URL.Query())
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	radiusKm := queryFloat(c, "radius_km", 10.0)
-	limit := queryInt(c, "limit", 20)
-
-	var t *Type
-	if v := c.Query("type"); v != "" {
-		pt := Type(v)
-		t = &pt
-	}
-
-	results, err := h.repo.Near(c.Request.Context(), lat, lng, radiusKm, t, limit)
+	results, err := h.repo.Near(c.Request.Context(), params)
 	if err != nil {
 		respondRepoErr(c, err)
 		return
+	}
+	if results == nil {
+		results = []Provider{}
 	}
 	c.JSON(http.StatusOK, gin.H{"total": len(results), "data": results})
 }
@@ -79,18 +71,4 @@ func respondRepoErr(c *gin.Context, err error) {
 		return
 	}
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-}
-
-func queryFloat(c *gin.Context, key string, def float64) float64 {
-	if v, err := strconv.ParseFloat(c.Query(key), 64); err == nil {
-		return v
-	}
-	return def
-}
-
-func queryInt(c *gin.Context, key string, def int) int {
-	if v, err := strconv.Atoi(c.Query(key)); err == nil {
-		return v
-	}
-	return def
 }
