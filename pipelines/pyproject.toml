@@ -14,7 +14,7 @@ dependencies = [
     # Lets requests verify against the OS trust store instead of certifi's
     # bundle. Needed wherever a TLS-inspecting proxy re-signs traffic with a
     # root that IT installed in the OS store — see pipelines/common/trust.py.
-    "truststore>=0.10",
+    "truststore>=0.10.4",
 ]
 
 [dependency-groups]
