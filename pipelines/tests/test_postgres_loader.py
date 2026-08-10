@@ -276,3 +276,128 @@ def test_removed_state_coverage_is_applied_on_reload(loader):
         ).fetchall()
 
     assert [s[0] for s in states] == ["Bayern"]
+
+
+# ------------------------------------------------- IK enrichment regressions
+#
+# All of these reproduce a defect observed on 2026-08-10: a run whose IK
+# enrichment came back thinner than the database silently added duplicate
+# insurers (91 in one run, 16 in another) and still exited 0.
+
+
+def _insurer_rows(name: str = "PyTest IK Kasse"):
+    import psycopg
+
+    with psycopg.connect(DSN) as conn:
+        return conn.execute(
+            "SELECT source_id, ik_nummer FROM care_infrastructure"
+            " WHERE type = 'krankenkasse' AND name = %s ORDER BY source_id",
+            (name,),
+        ).fetchall()
+
+
+@integration
+def test_insurer_without_ik_does_not_duplicate_an_ik_keyed_row(loader):
+    """The core defect: a failed IK lookup must not create a second row."""
+    base = {"name": "PyTest IK Kasse", "zusatzbeitrag": 1.5,
+            "geoffnet_in": "Bayern", "bundeslaender": ["Bayern"]}
+
+    first = loader.load_insurers(
+        [{**base, "ik_nummer": "999999801"}], gueltig_ab=date(2026, 1, 1))
+    assert (first.inserted, first.updated) == (1, 0)
+    assert _insurer_rows() == [("ik:999999801", "999999801")]
+
+    # Same insurer, enrichment failed this time — no IK on the record.
+    second = loader.load_insurers([base], gueltig_ab=date(2026, 1, 1))
+
+    assert (second.inserted, second.updated) == (0, 1), "a duplicate row was inserted"
+    assert second.key_preserved == 1, "the degraded run was not reported"
+    # The key stays, and the previously resolved IK is not erased.
+    assert _insurer_rows() == [("ik:999999801", "999999801")]
+
+
+@integration
+def test_ik_is_never_overwritten_with_null(loader):
+    """`ik_nummer = EXCLUDED.ik_nummer` would blank a resolved IK.
+
+    Invisible until the key stopped flapping: before, a run without an IK
+    inserted a new row instead of updating the existing one.
+    """
+    base = {"name": "PyTest IK Kasse", "zusatzbeitrag": 1.5,
+            "geoffnet_in": "Bayern", "bundeslaender": ["Bayern"]}
+
+    loader.load_insurers([{**base, "ik_nummer": "999999802"}], gueltig_ab=date(2026, 1, 1))
+    loader.load_insurers([base], gueltig_ab=date(2026, 1, 1))
+
+    rows = _insurer_rows()
+    assert len(rows) == 1
+    assert rows[0][1] == "999999802", "a failed enrichment erased the stored IK"
+
+
+@integration
+def test_name_key_is_upgraded_once_an_ik_appears(loader):
+    """The intended direction still works: name key → IK key, in place."""
+    base = {"name": "PyTest IK Kasse", "zusatzbeitrag": 1.5,
+            "geoffnet_in": "Bayern", "bundeslaender": ["Bayern"]}
+
+    loader.load_insurers([base], gueltig_ab=date(2026, 1, 1))
+    assert _insurer_rows() == [("gkv:PyTest IK Kasse", None)]
+
+    report = loader.load_insurers(
+        [{**base, "ik_nummer": "999999803"}], gueltig_ab=date(2026, 1, 1))
+
+    assert report.rekeyed == 1
+    assert (report.inserted, report.updated) == (0, 1)
+    assert _insurer_rows() == [("ik:999999803", "999999803")]
+
+
+@integration
+def test_a_corrected_ik_moves_the_row_rather_than_adding_one(loader):
+    """The official list does revise IKs between publications."""
+    base = {"name": "PyTest IK Kasse", "zusatzbeitrag": 1.5,
+            "geoffnet_in": "Bayern", "bundeslaender": ["Bayern"]}
+
+    loader.load_insurers([{**base, "ik_nummer": "999999804"}], gueltig_ab=date(2026, 1, 1))
+    loader.load_insurers([{**base, "ik_nummer": "999999805"}], gueltig_ab=date(2026, 1, 1))
+
+    assert _insurer_rows() == [("ik:999999805", "999999805")]
+
+
+@integration
+def test_history_stays_attached_to_the_same_row(loader):
+    """A duplicated insurer splits its own time series — check it does not."""
+    import psycopg
+
+    base = {"name": "PyTest IK Kasse", "geoffnet_in": "Bayern",
+            "bundeslaender": ["Bayern"]}
+
+    loader.load_insurers(
+        [{**base, "ik_nummer": "999999806", "zusatzbeitrag": 1.5}],
+        gueltig_ab=date(2026, 1, 1))
+    loader.load_insurers(
+        [{**base, "zusatzbeitrag": 1.9}], gueltig_ab=date(2027, 1, 1))
+
+    with psycopg.connect(DSN) as conn:
+        rates = conn.execute(
+            """
+            SELECT h.gueltig_ab, h.zusatzbeitrag
+              FROM zusatzbeitrag_historie h
+              JOIN care_infrastructure c ON c.id = h.krankenkasse_id
+             WHERE c.name = 'PyTest IK Kasse'
+             ORDER BY h.gueltig_ab
+            """
+        ).fetchall()
+
+    assert [str(r[0]) for r in rates] == ["2026-01-01", "2027-01-01"], (
+        "the time series was split across duplicate rows"
+    )
+
+
+@integration
+def test_count_insurers_with_ik_is_the_regression_baseline(loader):
+    before = loader.count_insurers_with_ik()
+    loader.load_insurers(
+        [{"name": "PyTest IK Kasse", "ik_nummer": "999999807", "zusatzbeitrag": 1.0,
+          "geoffnet_in": "Bayern", "bundeslaender": ["Bayern"]}],
+        gueltig_ab=date(2026, 1, 1))
+    assert loader.count_insurers_with_ik() == before + 1
