@@ -99,13 +99,10 @@ def test_no_new_literal_verify_false_is_introduced():
     certificate is checked, so nothing here needs `verify=False`.
 
     Scope, stated plainly so this test is not mistaken for a stronger guarantee:
-    it catches a literal `verify=False` only. `AddressScraper._fetch` relaxes
-    verification through a *variable* (`attempts = [(url, True), (url, False)]`)
-    and is therefore invisible to this check. That fallback predates the trust
-    store, exists for the three insurer hosts whose certificates are genuinely
-    invalid, and is a deliberate trade — an unverified Impressum could feed a
-    wrong address into the dataset. Narrowing it to an explicit per-host
-    allowlist is tracked separately.
+    it catches a literal `verify=False` only. `AddressScraper._fetch` still passes
+    verification as a *variable*, but since 2026-08-10 the value can only be False
+    for a host on its INVALID_CERT_HOSTS allowlist, and such a fetch is recorded in
+    `scraping_status`. Covered by tests in test_address_scraper.py rather than here.
     """
     import ast
     from pathlib import Path

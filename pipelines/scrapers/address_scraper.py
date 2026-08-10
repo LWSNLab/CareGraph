@@ -13,6 +13,39 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
 
+# Hosts allowed to be fetched with certificate verification relaxed. Everywhere
+# else a certificate error is a real error and the fetch fails.
+#
+# **Deliberately empty.** Measured 2026-08-10 across all 93 insurer hosts,
+# verifying against the OS trust store, then re-tested with verification off to
+# see whether relaxing would actually yield content:
+#
+#   bkk-deutsche-bank.de                 verify=False → HTTP 200, but the host has
+#                                        a manual override, so it never reaches
+#                                        this code path.
+#   bkk-miele.de                         ConnectionError either way — relaxing
+#                                        changes nothing. Also overridden.
+#   pflegeheim-michelberg.casa-reha.de   verify=False → HTTP 403; the server
+#                                        blocks the bot regardless.
+#
+# So no host gains anything from an unverified connection. The mechanism is kept
+# rather than deleted: it is the reviewed place to add a host if one ever needs
+# it, and such a fetch is then logged and marked in `scraping_status` instead of
+# passing silently. Adding an entry means re-measuring, not appending on a hunch.
+#
+# Related but a different question: HTTP_ONLY_HOSTS in pipelines/common/normalize.py
+# records which hosts answer on no HTTPS port at all.
+INVALID_CERT_HOSTS: frozenset[str] = frozenset()
+
+
+def _host_key(host: str) -> str:
+    """Compare hosts without the www. prefix, which varies between candidates."""
+    return host.lower().split(":")[0].removeprefix("www.")
+
+
+def _has_invalid_certificate(host: str) -> bool:
+    return _host_key(host) in INVALID_CERT_HOSTS
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -55,6 +88,12 @@ class AddressScraper:
 
         # Hosts, deren https-Port hängt (nur http nutzbar) – zur Laufzeit gelernt
         self._https_dead: set[str] = set()
+
+        # Hosts, die nur über eine nicht authentifizierte Verbindung erreichbar
+        # waren. Fließt in `scraping_status` ein, damit sich eine so gelesene
+        # Adresse von einer über geprüftes TLS unterscheiden lässt.
+        self._relaxed_verification: set[str] = set()
+        self._plaintext: set[str] = set()
 
         # Local manual overrides for bot-blocked sites (z. B. Miele, BMW,
         # Deutsche Bank – Werks-BKKs, deren Impressum nicht scrapebar ist).
@@ -257,22 +296,23 @@ class AddressScraper:
         }
 
     def _fetch(self, url: str) -> "requests.Response | None":
-        """GETs a URL, tolerating broken TLS and https-only-timeouts.
+        """GETs a URL, degrading only as far as the target actually requires.
 
-        Reihenfolge der Versuche: https mit + ohne Zertifikatsprüfung, danach
-        http (manche Kassen-Server – z. B. suedzucker-bkk.de – antworten NUR
-        über http und laufen bei https in einen ReadTimeout). Hosts, deren
-        https-Port hängt, werden gemerkt, damit die restlichen Pfade nicht
-        erneut in den Timeout laufen."""
+        Attempt order: verified https, then — **only for allowlisted hosts** —
+        https with verification relaxed, then plain http (a few insurer servers,
+        e.g. suedzucker-bkk.de, answer over http alone and time out on 443).
+        Hosts whose https port hangs are remembered so the remaining paths do not
+        run into the same timeout.
+
+        Both downgrades are recorded per host and reflected in `scraping_status`,
+        so an address read over an unauthenticated connection is distinguishable
+        from one read over verified TLS.
+        """
         host = urlparse(url).netloc
         if url.startswith("https://") and host in self._https_dead:
             url = "http://" + url[len("https://"):]
 
-        attempts = [(url, True), (url, False)]
-        if url.startswith("https://"):
-            attempts.append(("http://" + url[len("https://"):], False))
-
-        for target, verify_ssl in attempts:
+        for target, verify_ssl in self._attempts(url):
             try:
                 time.sleep(self.delay)
                 res = requests.get(
@@ -284,6 +324,7 @@ class AddressScraper:
                 )
                 if res.status_code == 200:
                     res.encoding = res.apparent_encoding or "utf-8"
+                    self._record_transport(host, target, verify_ssl)
                     return res
             except requests.exceptions.SSLError:
                 continue
@@ -300,6 +341,43 @@ class AddressScraper:
                 log.debug("fetch attempt failed: %s", target, exc_info=True)
                 continue
         return None
+
+    def _attempts(self, url: str) -> list[tuple[str, bool]]:
+        """The connection attempts for one URL, in order, as (target, verify).
+
+        Only a host on INVALID_CERT_HOSTS ever gets an attempt with verification
+        switched off. Every other host either connects over verified TLS or falls
+        back to http — which is at least *visibly* unauthenticated and gets
+        recorded as such, rather than silently accepting a forged certificate.
+        """
+        attempts: list[tuple[str, bool]] = [(url, True)]
+        if not url.startswith("https://"):
+            return attempts
+
+        if _has_invalid_certificate(urlparse(url).netloc):
+            attempts.append((url, False))
+
+        # verify is irrelevant without TLS; True keeps the only False above.
+        attempts.append(("http://" + url[len("https://"):], True))
+        return attempts
+
+    def _record_transport(self, host: str, target: str, verified: bool) -> None:
+        """Note that a host needed a downgrade, once, and say so out loud."""
+        key = _host_key(host)
+        if target.startswith("http://"):
+            if key not in self._plaintext:
+                self._plaintext.add(key)
+                log.warning(
+                    "%s answered only over plain http — its address is unauthenticated",
+                    key,
+                )
+        elif not verified:
+            if key not in self._relaxed_verification:
+                self._relaxed_verification.add(key)
+                log.warning(
+                    "%s has an invalid certificate; read with verification relaxed "
+                    "(allowlisted) — its address is unauthenticated", key,
+                )
 
     def _extract_from_text(self, text: str) -> dict[str, str] | None:
         """Findet PLZ + Ort und (optional) Straße in einem Textblock."""
@@ -338,6 +416,33 @@ class AddressScraper:
         return found
 
     def scrape_address_for_domain(
+        self, domain: str, kassen_name: str = ""
+    ) -> dict[str, str]:
+        result = self._scrape_address_for_domain(domain, kassen_name)
+        return self._mark_transport(result, domain)
+
+    def _mark_transport(self, result: dict[str, str], domain: str) -> dict[str, str]:
+        """Reflect an unauthenticated connection in the status.
+
+        An address read over plain http, or over TLS whose certificate could not
+        be verified, is not worth as much as one read over verified TLS — someone
+        able to intercept the connection could have supplied it. Until this was
+        recorded the two were indistinguishable in `care_infrastructure`.
+
+        Follows the existing "Success (Override)" convention so the column stays
+        readable and a consumer can filter on the suffix.
+        """
+        if not result.get("status", "").startswith("Success"):
+            return result
+
+        key = _host_key(self._sanitize_domain(domain).split("/")[0])
+        if key in self._relaxed_verification:
+            result["status"] = "Success (unverified TLS)"
+        elif key in self._plaintext:
+            result["status"] = "Success (plaintext http)"
+        return result
+
+    def _scrape_address_for_domain(
         self, domain: str, kassen_name: str = ""
     ) -> dict[str, str]:
         sanitized_domain = self._sanitize_domain(domain)

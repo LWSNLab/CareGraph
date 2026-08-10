@@ -8,12 +8,14 @@ wrapped URLs, override lookup, positional DataFrame assignment).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
 import requests
 from bs4 import BeautifulSoup
 
+from pipelines.scrapers import address_scraper
 from pipelines.scrapers.address_scraper import AddressScraper
 
 
@@ -336,3 +338,137 @@ def test_enrich_dataframe_assigns_positionally(monkeypatch):
 
     assert list(enriched["ort"]) == ["Astadt", "Bstadt"]
     assert list(enriched["plz"]) == ["11111", "22222"]
+
+
+# ------------------------------------------- TLS downgrades (allowlist only)
+#
+# The fetch loop used to retry *every* host with certificate verification
+# switched off. The scraper reads Impressum pages whose postal addresses land in
+# care_infrastructure, so anyone able to intercept one of those connections could
+# supply a wrong address — and nothing in the data said which addresses came over
+# an authenticated connection.
+
+
+@pytest.fixture
+def allowlisted(monkeypatch):
+    """A host on the allowlist, injected rather than taken from the real set.
+
+    The shipped allowlist is empty (see the module comment), and a test must not
+    silently start passing or failing because that set changes.
+    """
+    host = "broken-cert.example"
+    monkeypatch.setattr(address_scraper, "INVALID_CERT_HOSTS", frozenset({host}))
+    return host
+
+
+def test_the_shipped_allowlist_is_empty():
+    """Nothing currently earns an unverified connection — keep it that way.
+
+    Measured: of the three hosts that fail certificate validation, two have
+    manual overrides (so they never reach the fetch path) and the third answers
+    403 even with verification off. Adding an entry should mean re-measuring.
+    """
+    assert address_scraper.INVALID_CERT_HOSTS == frozenset(), (
+        "a host was allowlisted for unverified TLS — was the need re-measured?"
+    )
+
+
+def test_only_allowlisted_hosts_get_an_unverified_attempt(allowlisted):
+    scraper = AddressScraper()
+
+    attempts = scraper._attempts(f"https://{allowlisted}/impressum")
+    assert (f"https://{allowlisted}/impressum", False) in attempts, attempts
+
+
+def test_an_ordinary_host_never_gets_an_unverified_attempt():
+    scraper = AddressScraper()
+
+    attempts = scraper._attempts("https://tk.de/impressum")
+
+    assert all(verify for target, verify in attempts if target.startswith("https://")), (
+        f"verification relaxed for a host that is not allowlisted: {attempts}"
+    )
+    # The http fallback stays: some servers answer on no HTTPS port at all. It is
+    # visibly unauthenticated and recorded as such, which a forged certificate
+    # would not be.
+    assert ("http://tk.de/impressum", True) in attempts
+
+
+def test_verified_https_is_always_tried_first(allowlisted):
+    scraper = AddressScraper()
+    for host in ("tk.de", allowlisted):
+        first = scraper._attempts(f"https://{host}/")[0]
+        assert first == (f"https://{host}/", True), first
+
+
+def test_www_prefix_does_not_bypass_the_allowlist(allowlisted):
+    scraper = AddressScraper()
+
+    with_www = scraper._attempts(f"https://www.{allowlisted}/")
+    assert any(not verify for _, verify in with_www), with_www
+
+
+def test_plain_http_url_gets_a_single_attempt():
+    scraper = AddressScraper()
+    assert scraper._attempts("http://kasse.de/x") == [("http://kasse.de/x", True)]
+
+
+def test_relaxed_verification_is_reflected_in_the_status(caplog):
+    scraper = AddressScraper()
+    host = "bkk-miele.de"
+
+    with caplog.at_level("WARNING"):
+        scraper._record_transport(host, f"https://{host}/impressum", False)
+
+    assert "invalid certificate" in caplog.text
+    assert host in caplog.text
+
+    marked = scraper._mark_transport({"status": "Success", "plz": "1"}, host)
+    assert marked["status"] == "Success (unverified TLS)"
+
+
+def test_plaintext_is_reflected_in_the_status(caplog):
+    scraper = AddressScraper()
+    host = "suedzucker-bkk.de"
+
+    with caplog.at_level("WARNING"):
+        scraper._record_transport(host, f"http://{host}/impressum", True)
+
+    assert "plain http" in caplog.text
+
+    marked = scraper._mark_transport({"status": "Success", "plz": "1"}, host)
+    assert marked["status"] == "Success (plaintext http)"
+
+
+def test_verified_fetch_leaves_the_status_untouched():
+    scraper = AddressScraper()
+    scraper._record_transport("tk.de", "https://tk.de/impressum", True)
+
+    marked = scraper._mark_transport({"status": "Success", "plz": "1"}, "tk.de")
+    assert marked["status"] == "Success"
+    assert not scraper._relaxed_verification and not scraper._plaintext
+
+
+def test_a_downgrade_warns_once_per_host(caplog):
+    scraper = AddressScraper()
+    with caplog.at_level("WARNING"):
+        for _ in range(4):
+            scraper._record_transport("bkk-miele.de", "https://bkk-miele.de/a", False)
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1, f"warned {len(warnings)} times for one host"
+
+
+def test_failed_scrapes_are_not_marked():
+    scraper = AddressScraper()
+    scraper._plaintext.add("kasse.de")
+
+    for status in ("Failed / Manual Check", "No Domain"):
+        result = scraper._mark_transport({"status": status}, "kasse.de")
+        assert result["status"] == status
+
+
+def test_allowlist_records_when_it_was_measured():
+    """Each entry weakens one host's guarantee, so the basis must be written down."""
+    source = Path("pipelines/scrapers/address_scraper.py").read_text(encoding="utf-8")
+    assert "Measured 2026-08-10" in source, "the allowlist must record when it was measured"
