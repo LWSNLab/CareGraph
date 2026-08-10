@@ -1,10 +1,13 @@
 # src/gkv_parser
+import logging
 import re
 from pathlib import Path
 
 import pandas as pd
 import pdfplumber
 import requests
+
+log = logging.getLogger(__name__)
 
 
 class GKVParser:
@@ -101,14 +104,36 @@ class GKVParser:
             if re.match(r"^seite \d", joined):
                 continue
 
-            # Neuer Eintrag = Zeile mit Zusatzbeitrag-Wert; sonst Fortsetzung.
-            if re.search(r"\d", cells[2]):
+            if self._starts_entry(cells):
                 rows.append(cells)
             elif rows:
                 for i in range(4):
                     if cells[i]:
                         rows[-1][i] = (rows[-1][i] + " " + cells[i]).strip()
         return rows
+
+    @staticmethod
+    def _starts_entry(cells: list[str]) -> bool:
+        """Does this visual line begin a new insurer, or continue the one above?
+
+        An entry's first line is the only one that fills the name *and* the
+        Zusatzbeitrag column; every wrapped line fills one column at a time.
+        Both parts of the test are needed:
+
+        - The name column alone is not enough. Wrapped name lines start at the
+          same x-position as a new entry ("(SBK)", "Gartenbau (SVLFG)"), so
+          position cannot distinguish them.
+        - The Zusatzbeitrag column alone is not enough either: a region that
+          wraps can land there.
+
+        Note this deliberately does **not** require a *numeric* Zusatzbeitrag.
+        That was the original rule, and it silently merged two insurers: the
+        SVLFG levies none, so its cell reads "wird nicht erhoben", the line
+        looked like a continuation, and it was folded into the entry above —
+        name and website concatenated ("skd-bkk.dewww.svlfg.de"). Presence of a
+        value is the signal; what the value says is the cleaner's business.
+        """
+        return bool(cells[0].strip()) and bool(cells[2].strip())
 
     def _column_edges(self, words) -> list[float]:
         """Left x-edge of each of the 4 columns, derived from the header row."""
@@ -168,7 +193,32 @@ class GKVParser:
 
         columns = ["name", "website", "zusatzbeitrag", "geoffnet_in", "is_bundesweit"]
         self.cleaned_df = df[columns].dropna(subset=["name"])
+        self._warn_on_merge_artefacts(self.cleaned_df)
         return self.cleaned_df
+
+    @staticmethod
+    def _warn_on_merge_artefacts(df: pd.DataFrame) -> None:
+        """Flag rows that look like two entries folded into one.
+
+        Two insurers were merged for months without anyone noticing, because a
+        merged row is still a plausible-looking row. Both signals below would
+        have caught it on the first run. A warning rather than an exception:
+        this is a heuristic, and a false positive must not stop an ingestion.
+        """
+        # A second "www." can only come from two URLs concatenated.
+        doubled = df[df["website"].str.count(r"www\.") > 0]
+        for _, row in doubled.iterrows():
+            log.warning(
+                "website %r looks like two concatenated URLs — merged row? (%s)",
+                row["website"], row["name"],
+            )
+
+        # The longest legitimate name in the 2026 list is 59 characters.
+        for _, row in df[df["name"].str.len() > 80].iterrows():
+            log.warning(
+                "insurer name is %d characters — merged row? %r",
+                len(row["name"]), row["name"],
+            )
 
 
 # Quick Local Test Runner

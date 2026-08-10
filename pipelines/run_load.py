@@ -42,6 +42,21 @@ class IKRegression(RuntimeError):
     """IK enrichment resolved fewer numbers than the database already holds."""
 
 
+def _rate_or_none(value):
+    """Turn a missing Zusatzbeitrag into None.
+
+    Not every insurer levies one — the SVLFG's source cell reads "wird nicht
+    erhoben" — and the parser yields NaN for those. `NaN is None` is false and
+    PostgreSQL NUMERIC accepts 'NaN', so passing it through would store a rate
+    of NaN instead of recording no rate. Checked with `value != value` so this
+    module keeps working without importing pandas: the provider path is
+    deliberately free of it.
+    """
+    if value is None or value != value:
+        return None
+    return value
+
+
 def load_insurers(
     loader: PostgresLoader,
     pdf: Path,
@@ -89,7 +104,7 @@ def load_insurers(
             "ik_nummer": ik_by_name.get(row["name"]),
             "name": row["name"],
             "website": row["website"],
-            "zusatzbeitrag": row["zusatzbeitrag"],
+            "zusatzbeitrag": _rate_or_none(row["zusatzbeitrag"]),
             "geoffnet_in": row["geoffnet_in"],
             "is_bundesweit": bool(row["is_bundesweit"]),
             "bundeslaender": parse_bundeslaender(
