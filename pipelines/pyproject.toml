@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=9.1.1", "ruff>=0.6"]
+dev = ["pytest>=9.1.1", "ruff>=0.16.2"]
 
 # Treat this as an application (managed deps + venv), not an installable package.
 # Avoids a build backend and its packaging requirements.
