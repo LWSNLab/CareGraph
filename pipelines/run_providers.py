@@ -21,7 +21,7 @@ from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
-from pipelines.common import BUNDESLAENDER
+from pipelines.common import BUNDESLAENDER, use_system_trust_store
 from pipelines.scrapers.osm_provider_scraper import OSMProviderScraper
 
 log = logging.getLogger("pipelines.run_providers")
@@ -41,6 +41,8 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)-7s %(message)s",
     )
+    # Overpass is reached over TLS; see pipelines/common/trust.py.
+    use_system_trust_store()
 
     regions = list(BUNDESLAENDER) if args.all else args.bundesland
     scraper = OSMProviderScraper(delay=args.delay)

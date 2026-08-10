@@ -215,18 +215,155 @@ def test_too_few_columns_raises():
 
 @pytest.mark.skipif(not REAL_PDF.exists(), reason="official GKV PDF not present")
 def test_parses_the_real_gkv_list_completely():
-    """End-to-end against the official list: every insurer must be captured."""
+    """End-to-end against the official list: every insurer must be captured.
+
+    The expected count is derived from the **homepage** column, not from the
+    contribution rate. Counting `\\d,\\d\\d %` was the original approach and it
+    hid a defect for months: it used the very signal the parser used to detect
+    an entry, so the two agreed that an insurer is by definition something with
+    a numeric rate. The SVLFG has none, its row was folded into the one above,
+    and this test still passed.
+    """
     import re
 
     import pdfplumber
 
     with pdfplumber.open(REAL_PDF) as pdf:
         text = "\n".join(page.extract_text() or "" for page in pdf.pages)
-    expected = len(re.findall(r"\d,\d\d\s*%", text))
+
+    # Every insurer lists exactly one homepage.
+    expected = len(re.findall(r"www\.", text))
+    # Cross-check from the other direction: numeric rates plus the ones stated
+    # in words must add up to the same number.
+    numeric = len(re.findall(r"\d,\d\d\s*%", text))
+    stated_in_words = len(re.findall(r"wird\s+nicht\s+erhoben", text))
+    assert numeric + stated_in_words == expected, (
+        f"{numeric} numeric + {stated_in_words} textual rates != {expected} homepages"
+    )
 
     df = GKVParser(REAL_PDF, output_filename=REAL_PDF.name).parse_pdf()
 
     assert len(df) == expected
-    assert df["zusatzbeitrag"].notna().all()
     assert (df["name"].str.len() > 0).all()
     assert (df["website"].str.len() > 0).all()
+    # One insurer levies no Zusatzbeitrag; the rest must all have one.
+    assert df["zusatzbeitrag"].notna().sum() == numeric
+    assert df["zusatzbeitrag"].isna().sum() == stated_in_words
+
+
+# ------------------------------------------- non-numeric Zusatzbeitrag (SVLFG)
+#
+# Regression tests for a defect found 2026-08-10: two insurers were merged into
+# one row for months. The old rule treated "a line whose Zusatzbeitrag column
+# contains a digit" as the start of an entry. The SVLFG levies none — its cell
+# reads "wird nicht erhoben" — so its line looked like a continuation and was
+# folded into the entry above, concatenating both names and both URLs.
+
+
+def svlfg_page() -> FakePage:
+    """The real layout of page 4 around SKD BKK and the SVLFG.
+
+    Line-for-line as pdfplumber reports it, including the wrapped region lines
+    of SKD BKK and the wrapped name lines of the SVLFG.
+    """
+    return FakePage(
+        header_words()
+        + [
+            # SKD BKK — a normal entry with a numeric rate
+            word("SKD", X_NAME, 447.0), word("BKK", X_NAME + 22, 447.0),
+            word("www.skd-bkk.de", X_WEB, 447.0),
+            word("2,98", X_BEITRAG, 447.0), word("%", X_BEITRAG + 22, 447.0),
+            word("Baden-Württemberg,", X_REGION, 447.0),
+            # …its region wraps over two lines (name column empty)
+            word("Hamburg,", X_REGION, 459.0), word("Hessen", X_REGION + 40, 459.0),
+            word("Schleswig-Holstein", X_REGION, 471.0),
+            # SVLFG — a new entry whose rate is text, not a number
+            word("Sozialversicherung", X_NAME, 501.0), word("für", X_NAME + 90, 501.0),
+            word("www.svlfg.de", X_WEB, 501.0),
+            word("wird", X_BEITRAG, 501.0), word("nicht", X_BEITRAG + 20, 501.0),
+            word("erhoben", X_BEITRAG + 44, 501.0),
+            word("branchenbezogen", X_REGION, 501.0),
+            # …its name wraps, starting at the *same* x as a new entry
+            word("Landwirtschaft,", X_NAME, 513.0), word("Forsten", X_NAME + 70, 513.0),
+            word("Gartenbau", X_NAME, 525.0), word("(SVLFG)", X_NAME + 50, 525.0),
+        ]
+    )
+
+
+def test_entry_with_a_non_numeric_rate_is_not_folded_into_the_one_above():
+    rows = parser()._parse_page(svlfg_page())
+
+    assert len(rows) == 2, f"expected two entries, got {len(rows)}: {rows}"
+    assert rows[0][0] == "SKD BKK"
+    assert rows[0][1] == "www.skd-bkk.de"
+    assert rows[1][0] == "Sozialversicherung für Landwirtschaft, Forsten Gartenbau (SVLFG)"
+    assert rows[1][1] == "www.svlfg.de"
+    # The tell-tale symptom: two URLs glued together.
+    assert "www" not in rows[0][1].removeprefix("www.")
+    assert rows[1][2] == "wird nicht erhoben"
+
+
+def test_wrapped_region_still_attaches_to_the_entry_above():
+    """The fix must not break the continuation handling it replaces."""
+    rows = parser()._parse_page(svlfg_page())
+    assert "Hamburg" in rows[0][3] and "Schleswig-Holstein" in rows[0][3]
+    # …and must not leak into the next entry.
+    assert "Hamburg" not in rows[1][3]
+
+
+def test_a_non_numeric_rate_becomes_nan_not_zero():
+    """No Zusatzbeitrag is missing data, not a rate of 0.00 %."""
+    p = parser()
+    p.raw_df = pd.DataFrame(
+        [["SVLFG", "www.svlfg.de", "wird nicht erhoben", "branchenbezogen"]],
+        columns=[0, 1, 2, 3],
+    )
+    out = p._clean_data()
+    assert pd.isna(out.iloc[0]["zusatzbeitrag"])
+
+
+def test_starts_entry_needs_both_name_and_rate():
+    p = parser()
+    assert p._starts_entry(["SKD BKK", "www.skd-bkk.de", "2,98 %", "Bayern"])
+    assert p._starts_entry(["SVLFG", "www.svlfg.de", "wird nicht erhoben", ""])
+    # A wrapped name line: same x-position as a new entry, but no rate.
+    assert not p._starts_entry(["Gartenbau (SVLFG)", "", "", ""])
+    # A wrapped region line.
+    assert not p._starts_entry(["", "", "", "Hamburg, Hessen"])
+    # A wrapped URL line.
+    assert not p._starts_entry(["", "kasse.de/pfad", "", ""])
+    assert not p._starts_entry(["", "", "", ""])
+
+
+def test_merge_artefacts_are_warned_about(caplog):
+    """The guard that would have caught this on day one."""
+    p = parser()
+    p.raw_df = pd.DataFrame(
+        [["SKD BKK Sozialversicherung für Landwirtschaft, Forsten und Gartenbau (SVLFG)",
+          "www.skd-bkk.dewww.svlfg.de", "2,98 %", "Bayern"]],
+        columns=[0, 1, 2, 3],
+    )
+    with caplog.at_level("WARNING"):
+        p._clean_data()
+
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "concatenated" in messages, messages
+    assert "merged row" in messages, messages
+
+
+@pytest.mark.skipif(not REAL_PDF.exists(), reason="official PDF not present")
+def test_real_list_has_no_merge_artefacts():
+    df = GKVParser(REAL_PDF).parse_pdf()
+
+    # 93, not 92: the SVLFG is its own insurer.
+    assert len(df) == 93, f"expected 93 insurers, got {len(df)}"
+
+    glued = df[df["website"].str.contains("www.", regex=False, na=False)]
+    assert glued.empty, f"concatenated URLs remain: {list(glued['website'])}"
+
+    longest = df["name"].str.len().max()
+    assert longest <= 80, f"suspiciously long name ({longest} chars)"
+
+    names = set(df["name"])
+    assert "SKD BKK" in names
+    assert "Sozialversicherung für Landwirtschaft, Forsten und Gartenbau (SVLFG)" in names

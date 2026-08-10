@@ -72,6 +72,82 @@ INDEX_URLS: tuple[str, ...] = (
 # Kept for callers that want a single sector.
 INDEX_URL = INDEX_URLS[0]
 
+# Human-readable source names, so a failure report says which input is missing
+# rather than quoting a URL.
+SOURCE_KASSENSITZ = "Schlüsselverzeichnis 8a (Kassensitz-IK)"
+_SECTOR_LABELS = {
+    "sonstige_leistungserbringer": "Kostenträgerdateien SGB V",
+    "pflege": "Kostenträgerdateien Pflege",
+}
+
+
+def _sector_label(index_url: str) -> str:
+    for fragment, label in _SECTOR_LABELS.items():
+        if fragment in index_url:
+            return label
+    return index_url
+
+
+def _brief(err: Exception) -> str:
+    """Exception type plus its innermost cause — short, and actually diagnostic.
+
+    `requests` wraps a TLS failure as ``SSLError(MaxRetryError(SSLError(...)))``.
+    The outer message is ~260 characters of connection-pool boilerplate and the
+    part worth acting on — *"certificate verify failed: unable to get local
+    issuer certificate"* — sits at the very end, so truncating the front throws
+    away exactly the diagnosis. Hence the cause is unwrapped first.
+
+    urllib3 chains through ``args[0].reason`` rather than ``__cause__``, so both
+    are followed. The loop is bounded: a malformed chain must not hang a run.
+    """
+    root: BaseException = err
+    for _ in range(5):
+        reason = getattr(root.args[0], "reason", None) if root.args else None
+        nxt = root.__cause__ or reason
+        if not isinstance(nxt, BaseException):
+            break
+        root = nxt
+
+    text = str(root).split("\n", 1)[0]
+    return f"{type(err).__name__}: {text[:180]}"
+
+
+@dataclass
+class SourceStatus:
+    """Whether one input of the directory contributed, and why not if it did not."""
+
+    name: str
+    ok: bool
+    rows: int = 0
+    error: str | None = None
+
+
+@dataclass
+class DirectoryReport:
+    """What the directory was built from.
+
+    Exists so a partial failure cannot present itself as success. The entry count
+    alone cannot distinguish "this is everything there is" from "two of three
+    inputs were unreachable", and every number derived downstream inherits that
+    ambiguity.
+    """
+
+    sources: list[SourceStatus] = field(default_factory=list)
+    entries: int = 0
+
+    @property
+    def failed(self) -> list[SourceStatus]:
+        return [s for s in self.sources if not s.ok]
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.sources) and not self.failed
+
+    def summary(self) -> str:
+        ok = len(self.sources) - len(self.failed)
+        state = "complete" if self.complete else "INCOMPLETE"
+        return f"{self.entries} entries from {ok}/{len(self.sources)} sources ({state})"
+
 # href="/media/.../kostentraegerdateien_2/BK06Q326.ke0"
 _FILE_LINK = re.compile(
     r'href="(/media/[^"]*kostentraegerdateien[^"]*\.(?:ke\d|KE\d))"', re.IGNORECASE
@@ -205,6 +281,7 @@ class IKVerzeichnis:
         # The concatenated form survives that and is matched as a second key.
         self._by_concat: dict[str, str] = {}              # "aoknordost" -> IK
         self._raw: dict[str, str] = {}                    # original name -> IK
+        self._sources: list[SourceStatus] = []            # filled by load_all
         self.overrides = self._load_overrides(overrides_path)
 
     @staticmethod
@@ -294,6 +371,8 @@ class IKVerzeichnis:
         content = self._latest_ba_pdf()
         if content is None:
             log.warning("Schlüsselverzeichnis 8a unavailable — falling back to exchange files only")
+            self._sources.append(SourceStatus(
+                name=SOURCE_KASSENSITZ, ok=False, error="document unavailable"))
             return 0
 
         with pdfplumber.open(io.BytesIO(content)) as pdf:
@@ -301,6 +380,7 @@ class IKVerzeichnis:
 
         rows = self.add_kassensitz_from_text(text)
         log.info("Kassensitz-IK directory: %d rows", rows)
+        self._sources.append(SourceStatus(name=SOURCE_KASSENSITZ, ok=True, rows=rows))
         return rows
 
     def add_kassensitz_from_text(self, text: str) -> int:
@@ -335,31 +415,63 @@ class IKVerzeichnis:
             index_urls = (index_urls,)
 
         for index_url in index_urls:
+            label = _sector_label(index_url)
             try:
                 urls = self.discover_file_urls(index_url)
             except requests.RequestException as err:
                 log.warning("could not read index %s: %s", index_url, err)
+                self._sources.append(SourceStatus(
+                    name=label, ok=False, error=_brief(err)))
                 continue
+
+            rows, failures = 0, []
             for url in urls:
                 try:
-                    self.add_from_text(self._fetch(url))
+                    rows += self.add_from_text(self._fetch(url))
                 except requests.RequestException as err:
-                    # One unavailable file must not lose the rest of the directory.
+                    # One unavailable file must not lose the rest of the directory,
+                    # but it must be visible that the sector is incomplete.
                     log.warning("could not fetch %s: %s", url, err)
+                    failures.append(_brief(err))
+
+            self._sources.append(SourceStatus(
+                name=label,
+                ok=not failures,
+                rows=rows,
+                error=(f"{len(failures)} of {len(urls)} files failed: {failures[0]}"
+                       if failures else None),
+            ))
 
         log.info("IK directory: %d entries", len(self._raw))
         return len(self._raw)
 
-    def load_all(self) -> int:
+    def load_all(self) -> DirectoryReport:
         """Build the directory from both sources, authoritative one first.
 
         Order is the whole point: the Kassensitz-IK is indexed before the
         exchange files, so `setdefault` keeps it and the billing IKs only fill
         gaps for insurers the Schlüsselverzeichnis does not list.
+
+        Returns a report of *which* sources contributed. Previously this returned
+        only the entry count, so a caller could not tell a complete directory
+        from one missing half its inputs — the directory would simply be thinner
+        and every downstream number quietly worse. That is what happened on
+        2026-08-10: both exchange-file sources were unreachable, coverage fell
+        from 91 to 75, and the only trace was a warning in the log.
         """
+        self._sources = []
         self.load_kassensitz()
         self.load()
-        return len(self._raw)
+
+        report = DirectoryReport(sources=list(self._sources), entries=len(self._raw))
+        if report.failed:
+            log.error(
+                "IK directory is incomplete: %d of %d sources failed (%s). "
+                "Coverage will be lower than the data supports.",
+                len(report.failed), len(report.sources),
+                "; ".join(f"{s.name}: {s.error}" for s in report.failed),
+            )
+        return report
 
     # --------------------------------------------------------------- parsing
 

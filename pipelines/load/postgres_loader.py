@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -365,7 +366,12 @@ class PostgresLoader:
         Append-only: re-running the same publication is a no-op, and last
         year's value is never overwritten.
         """
-        if rate is None:
+        # NaN as well as None: an insurer that levies no Zusatzbeitrag has a
+        # non-numeric cell in the source ("wird nicht erhoben"), which pandas
+        # turns into NaN. `NaN is None` is false, and PostgreSQL NUMERIC accepts
+        # 'NaN' — so without this the SVLFG would carry a stored rate of NaN
+        # instead of no rate at all.
+        if rate is None or (isinstance(rate, float) and not math.isfinite(rate)):
             return 0
         cur.execute(
             """

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import requests
 
 from pipelines.parsers.ik_verzeichnis import (
     IKVerzeichnis,
@@ -259,3 +260,108 @@ def test_concat_key_is_order_preserving():
 
     assert _concat("BKK Schwarzwald-Baar-Heuberg") == _concat("BKKSchwarzwald-Baar-Heuberg")
     assert _concat("AOK - Die Gesundheitskasse für Niedersachsen") == _concat("AOK Niedersachsen")
+
+
+# ------------------------------------------------- source-failure reporting
+#
+# On 2026-08-10 both exchange-file sources were unreachable. The directory was
+# built from the Schlüsselverzeichnis alone, coverage fell from 91 to 75, and
+# `load_all()` returned only an entry count — so the caller could not tell a
+# complete directory from one missing half its inputs.
+
+
+def test_source_status_reports_a_failed_index(monkeypatch):
+    v = IKVerzeichnis()
+    # Primary source unavailable…
+    monkeypatch.setattr(v, "_latest_ba_pdf", lambda: None)
+    # …and both exchange indexes refuse to load.
+    def boom(index_url):
+        raise requests.RequestException("certificate verify failed: unable to get local issuer")
+    monkeypatch.setattr(v, "discover_file_urls", boom)
+
+    report = v.load_all()
+
+    assert not report.complete
+    assert len(report.failed) == 3, [s.name for s in report.failed]
+    assert "INCOMPLETE" in report.summary()
+    # The reason has to survive into the report, not just the log.
+    assert any("certificate verify failed" in (s.error or "") for s in report.failed)
+    # Named for a human, not by URL.
+    names = " ".join(s.name for s in report.failed)
+    assert "Schlüsselverzeichnis" in names
+    assert "SGB V" in names and "Pflege" in names
+
+
+def test_source_status_reports_success(monkeypatch):
+    v = IKVerzeichnis()
+    monkeypatch.setattr(v, "_latest_ba_pdf", lambda: None)
+    monkeypatch.setattr(v, "discover_file_urls", lambda index_url: ["http://x/f.ke0"])
+    monkeypatch.setattr(v, "_fetch", lambda url: "IDK+100820488+99+Test BKK'")
+
+    report = v.load_all()
+
+    exchange = [s for s in report.sources if "Kostenträgerdateien" in s.name]
+    assert len(exchange) == 2
+    assert all(s.ok for s in exchange), [s.error for s in exchange]
+    assert all(s.rows > 0 for s in exchange)
+    # The primary source was stubbed as unavailable, so the whole is incomplete.
+    assert not report.complete
+
+
+def test_partial_sector_failure_is_not_reported_as_ok(monkeypatch):
+    """One unavailable file must not lose the rest — but must still be visible."""
+    v = IKVerzeichnis()
+    monkeypatch.setattr(v, "_latest_ba_pdf", lambda: None)
+    monkeypatch.setattr(v, "discover_file_urls", lambda index_url: ["http://x/a.ke0", "http://x/b.ke0"])
+
+    def half_broken(url):
+        if url.endswith("b.ke0"):
+            raise requests.RequestException("503 Server Error")
+        return "IDK+100820488+99+Test BKK'"
+
+    monkeypatch.setattr(v, "_fetch", half_broken)
+    report = v.load_all()
+
+    sectors = [s for s in report.sources if "Kostenträgerdateien" in s.name]
+    assert all(not s.ok for s in sectors), "a sector with a failed file reported ok"
+    assert all("1 of 2 files failed" in (s.error or "") for s in sectors)
+    # The file that did load still counts.
+    assert len(v) > 0
+
+
+def test_brief_keeps_the_message_short():
+    from pipelines.parsers.ik_verzeichnis import _brief
+
+    err = requests.RequestException("HTTPSConnectionPool" + "x" * 500 + "\nsecond line")
+    out = _brief(err)
+    assert out.startswith("RequestException: ")
+    assert "second line" not in out
+    assert len(out) < 220
+
+
+def test_brief_unwraps_the_real_cause():
+    """The diagnosis is at the end of a requests message, so it must be unwrapped.
+
+    Truncating the front of `SSLError(MaxRetryError(SSLError(...)))` keeps 180
+    characters of connection-pool boilerplate and discards the one sentence an
+    operator can act on.
+    """
+    from pipelines.parsers.ik_verzeichnis import _brief
+
+    inner = Exception("certificate verify failed: unable to get local issuer certificate")
+
+    class Wrapper:
+        """Stands in for urllib3's MaxRetryError, which chains via `.reason`."""
+
+        reason = inner
+
+    boilerplate = (
+        "HTTPSConnectionPool(host='www.gkv-datenaustausch.de', port=443): "
+        "Max retries exceeded with url: " + "/some/very/long/path" * 8
+    )
+    outer = requests.exceptions.SSLError(Wrapper(), boilerplate)
+
+    out = _brief(outer)
+    assert "certificate verify failed" in out, out
+    assert "HTTPSConnectionPool" not in out, out
+    assert out.startswith("SSLError: ")
