@@ -7,6 +7,8 @@ package main
 
 import (
 	"log"
+	"log/slog"
+	"os"
 
 	"github.com/LWSNLab/caregraph/internal/auth"
 	"github.com/LWSNLab/caregraph/internal/infrastructure"
@@ -16,6 +18,12 @@ import (
 
 func main() {
 	cfg := infrastructure.LoadConfig()
+
+	// JSON to stderr: handlers log the cause of every 5xx here, and structured
+	// output is what a log aggregator can filter on. Level via CAREGRAPH_LOG_LEVEL.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: cfg.LogLevel,
+	})))
 
 	pool, err := infrastructure.NewPostgresPool(cfg)
 	if err != nil {

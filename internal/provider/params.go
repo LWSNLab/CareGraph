@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -129,6 +130,19 @@ func ParseNearParams(q url.Values) (NearParams, error) {
 	}
 
 	return p, nil
+}
+
+// ikPattern is the Institutionskennzeichen format: exactly nine digits.
+var ikPattern = regexp.MustCompile(`^[0-9]{9}$`)
+
+// ValidateIK rejects anything that cannot be an Institutionskennzeichen.
+// Checking the shape before querying keeps a typo from looking like a missing
+// record: a malformed IK is a client mistake (400), an unknown one is not (404).
+func ValidateIK(ik string) error {
+	if !ikPattern.MatchString(ik) {
+		return &ParamError{Param: "ik_nummer", Message: "must be exactly 9 digits"}
+	}
+	return nil
 }
 
 func requireFloat(q url.Values, key string) (float64, error) {

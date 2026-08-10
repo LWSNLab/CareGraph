@@ -2,11 +2,19 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// queryTimeout bounds a single database round trip. Measured p95 is under
+// 10 ms, so this is a backstop, not a budget: without it a stalled database
+// holds the request open and keeps a pool connection checked out indefinitely,
+// and enough of those exhaust the pool for every other caller.
+const queryTimeout = 5 * time.Second
 
 // Repository is the persistence port for care-infrastructure queries.
 type Repository interface {
@@ -60,6 +68,9 @@ LIMIT  $5`, providerColumns, originPoint, originPoint, originPoint)
 
 // Near implements the radius search behind GET /v1/infrastructure/near.
 func (r *PostgresRepository) Near(ctx context.Context, p NearParams) ([]Provider, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
 	var typeFilter *string
 	if p.Type != nil {
 		s := string(*p.Type)
@@ -92,24 +103,44 @@ func (r *PostgresRepository) Near(ctx context.Context, p NearParams) ([]Provider
 	return results, nil
 }
 
-// GetByIK — TODO (E3-S3): SELECT ... FROM care_infrastructure WHERE ik_nummer = $1.
+// getByIKQuery is an index lookup on the unique ik_nummer. No distance column:
+// the entity is addressed directly, not found in relation to a point.
+const getByIKQuery = `
+SELECT ` + providerColumns + `
+FROM   care_infrastructure
+WHERE  ik_nummer = $1`
+
+// GetByIK implements GET /v1/infrastructure/:ik_nummer. A missing row is
+// (nil, nil) — absence is a valid answer to a lookup, not a failure.
 func (r *PostgresRepository) GetByIK(ctx context.Context, ik string) (*Provider, error) {
-	return nil, ErrNotImplemented
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	var p Provider
+	err := scanProvider(r.pool.QueryRow(ctx, getByIKQuery, ik), &p)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("lookup by ik %q: %w", ik, err)
+	}
+	return &p, nil
 }
 
-// scanProvider reads providerColumns plus a trailing distance into dst.
+// scanProvider reads providerColumns into dst. Any extra targets are scanned
+// after them, in order — Near uses that for its distance column.
 // Everything except type, name and details is nullable in the schema.
-func scanProvider(row pgx.Row, dst *Provider, distance *float64) error {
+func scanProvider(row pgx.Row, dst *Provider, extra ...any) error {
 	var (
 		typeStr                                     string
 		ik, parent, website, street, plz, ort, land *string
 	)
-	err := row.Scan(
+	targets := []any{
 		&dst.ID, &ik, &typeStr, &dst.Name,
 		&parent, &website, &street, &plz, &ort, &land,
-		&dst.Details, distance,
-	)
-	if err != nil {
+		&dst.Details,
+	}
+	if err := row.Scan(append(targets, extra...)...); err != nil {
 		return fmt.Errorf("scan provider: %w", err)
 	}
 
