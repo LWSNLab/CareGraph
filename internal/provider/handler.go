@@ -6,12 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/LWSNLab/caregraph/internal/httpx"
 	"github.com/gin-gonic/gin"
 )
-
-// clientClosedRequest is nginx's 499: the caller went away before the response
-// was written. Not in net/http because it is not an IANA-registered code.
-const clientClosedRequest = 499
 
 // Handler exposes the provider domain over HTTP (Gin).
 type Handler struct {
@@ -40,7 +37,7 @@ func (h *Handler) Health(c *gin.Context) {
 func (h *Handler) Near(c *gin.Context) {
 	params, err := ParseNearParams(c.Request.URL.Query())
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, httpx.CodeInvalidParameter, err.Error())
 		return
 	}
 
@@ -59,17 +56,18 @@ func (h *Handler) Near(c *gin.Context) {
 // TODO: wire internal/search.Client (E3-S2).
 func (h *Handler) Search(c *gin.Context) {
 	if len(c.Query("q")) < 2 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "query parameter 'q' must be at least 2 characters"})
+		httpx.Fail(c, http.StatusBadRequest, httpx.CodeInvalidParameter,
+			"parameter 'q' must be at least 2 characters")
 		return
 	}
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "search not implemented"})
+	httpx.Fail(c, http.StatusNotImplemented, httpx.CodeNotImplemented, "search not implemented")
 }
 
 // GetByIK handles GET /v1/infrastructure/:ik_nummer.
 func (h *Handler) GetByIK(c *gin.Context) {
 	ik := c.Param("ik_nummer")
 	if err := ValidateIK(ik); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusBadRequest, httpx.CodeInvalidParameter, err.Error())
 		return
 	}
 
@@ -79,7 +77,8 @@ func (h *Handler) GetByIK(c *gin.Context) {
 		return
 	}
 	if p == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "No institution with this IK number"})
+		httpx.Fail(c, http.StatusNotFound, httpx.CodeNotFound,
+			"No institution with this IK number")
 		return
 	}
 	c.JSON(http.StatusOK, p)
@@ -93,35 +92,33 @@ func (h *Handler) GetByIK(c *gin.Context) {
 // code and nothing else.
 func (h *Handler) respondRepoErr(c *gin.Context, err error) {
 	ctx := c.Request.Context()
-	attrs := []any{
+	log := httpx.Logger(h.log, c).With(
 		"method", c.Request.Method,
 		"path", c.Request.URL.Path,
 		"query", c.Request.URL.RawQuery,
 		"error", err,
-	}
+	)
 
 	switch {
 	case errors.Is(err, ErrNotImplemented):
-		c.JSON(http.StatusNotImplemented, gin.H{"error": err.Error()})
+		httpx.Fail(c, http.StatusNotImplemented, httpx.CodeNotImplemented, err.Error())
 
 	// The caller hung up mid-request. Nothing failed here and there is nobody
 	// left to answer, so this must not be counted as a server error.
 	case errors.Is(err, context.Canceled) && ctx.Err() != nil:
-		h.log.DebugContext(ctx, "client disconnected before the response was ready", attrs...)
-		// 499 is nginx's "Client Closed Request". Non-standard, and nobody is
-		// there to read it — but it keeps abandoned requests from showing up as
-		// successes in the access log.
-		c.AbortWithStatus(clientClosedRequest)
+		log.DebugContext(ctx, "client disconnected before the response was ready")
+		c.AbortWithStatus(httpx.StatusClientClosedRequest)
 
-	// Our own queryTimeout, or one inherited from the caller. Distinct from a
-	// generic 500 because it is worth retrying and points at the database
-	// rather than at the request.
+	// Our own queryTimeout, the request-scoped timeout, or one inherited from
+	// the caller. Distinct from a generic 500 because it is worth retrying and
+	// points at the database rather than at the request.
 	case errors.Is(err, context.DeadlineExceeded):
-		h.log.ErrorContext(ctx, "database query timed out", attrs...)
-		c.JSON(http.StatusGatewayTimeout, gin.H{"error": "the query took too long, please retry"})
+		log.ErrorContext(ctx, "database query timed out")
+		httpx.Fail(c, http.StatusGatewayTimeout, httpx.CodeTimeout,
+			"the query took too long, please retry")
 
 	default:
-		h.log.ErrorContext(ctx, "request failed", attrs...)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		log.ErrorContext(ctx, "request failed")
+		httpx.Fail(c, http.StatusInternalServerError, httpx.CodeInternal, "internal error")
 	}
 }
