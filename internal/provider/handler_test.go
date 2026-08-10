@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LWSNLab/caregraph/internal/httpx"
 	"github.com/gin-gonic/gin"
 )
 
@@ -187,9 +188,17 @@ func TestNearMapsRepositoryFailureTo500(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", w.Code)
 	}
+
+	var body httpx.ErrorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
 	// The driver error must not reach the client.
-	if body := w.Body.String(); body != `{"error":"internal error"}` {
-		t.Errorf("body = %s, want a generic error", body)
+	if body.Error != "internal error" {
+		t.Errorf("error = %q, want the generic message", body.Error)
+	}
+	if body.Code != httpx.CodeInternal {
+		t.Errorf("code = %q, want %q", body.Code, httpx.CodeInternal)
 	}
 }
 
@@ -331,8 +340,9 @@ func TestClientDisconnectIsNotAServerError(t *testing.T) {
 	if strings.Contains(logged.String(), "level=ERROR") {
 		t.Errorf("client disconnect logged as a server error: %s", logged.String())
 	}
-	if w.Code != clientClosedRequest {
-		t.Errorf("status = %d, want %d (client closed request)", w.Code, clientClosedRequest)
+	if w.Code != httpx.StatusClientClosedRequest {
+		t.Errorf("status = %d, want %d (client closed request)",
+			w.Code, httpx.StatusClientClosedRequest)
 	}
 }
 

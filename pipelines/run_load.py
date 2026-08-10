@@ -38,8 +38,17 @@ def load_providers(loader: PostgresLoader, path: Path):
     return loader.load_providers(records)
 
 
+class IKRegression(RuntimeError):
+    """IK enrichment resolved fewer numbers than the database already holds."""
+
+
 def load_insurers(
-    loader: PostgresLoader, pdf: Path, gueltig_ab: date, expand: bool, with_ik: bool = True
+    loader: PostgresLoader,
+    pdf: Path,
+    gueltig_ab: date,
+    expand: bool,
+    with_ik: bool = True,
+    allow_ik_regression: bool = False,
 ):
     # Imported lazily so the provider path does not need pdfplumber.
     from pipelines.parsers.gkv_parser import GKVParser
@@ -59,8 +68,20 @@ def load_insurers(
         ik_by_name = report.matched
         print(f"🔑 IK matching: {report.summary()}")
         if report.unmatched:
-            # Never silent: these keep their name-based key.
+            # Never silent: these keep whatever key they already have.
             print(f"   without IK: {', '.join(report.unmatched)}")
+
+        # Stop before writing if the enrichment came back thinner than what is
+        # already stored. A source outage (an unreachable Kostenträgerdatei, a
+        # moved Schlüsselverzeichnis) otherwise reshapes good data quietly, and
+        # a scheduled run would report success while doing it.
+        known = loader.count_insurers_with_ik()
+        if known and len(ik_by_name) < known and not allow_ik_regression:
+            raise IKRegression(
+                f"resolved {len(ik_by_name)} IKs but the database already holds "
+                f"{known}; refusing to write. Check the IK sources are reachable, "
+                f"or pass --allow-ik-regression if the drop is real."
+            )
 
     insurers = []
     for _, row in df.iterrows():
@@ -93,7 +114,11 @@ def main() -> int:
     ap.add_argument("--expand-bundesweit", action="store_true",
                     help="Link nationwide insurers to all 16 states")
     ap.add_argument("--no-ik", action="store_true",
-                    help="Skip IK enrichment (avoids the network round-trip)")
+                    help="Skip IK enrichment (avoids the network round-trip). Existing "
+                         "rows keep their IK and their key; nothing is erased.")
+    ap.add_argument("--allow-ik-regression", action="store_true",
+                    help="Write even when fewer IKs resolved than are already stored. "
+                         "Only for a drop you have verified is real.")
     # INGEST_DATABASE_URL first: DATABASE_URL belongs to the read-only API role,
     # and loading with it would fail on the first write.
     ap.add_argument(
@@ -108,13 +133,27 @@ def main() -> int:
                         format="%(levelname)-7s %(message)s")
 
     loader = PostgresLoader(args.dsn)
-    if args.what == "providers":
-        report = load_providers(loader, args.input)
-    else:
-        report = load_insurers(loader, args.pdf, args.gueltig_ab,
-                               args.expand_bundesweit, with_ik=not args.no_ik)
+    try:
+        if args.what == "providers":
+            report = load_providers(loader, args.input)
+        else:
+            report = load_insurers(
+                loader, args.pdf, args.gueltig_ab, args.expand_bundesweit,
+                with_ik=not args.no_ik,
+                allow_ik_regression=args.allow_ik_regression,
+            )
+    except IKRegression as exc:
+        log.error("%s", exc)
+        return 2
 
     print(f"✅ {report.summary()}")
+    if report.key_preserved:
+        # Not a failure — the data is intact — but the enrichment was thinner
+        # than the database, and a scheduler should notice.
+        log.warning(
+            "%d insurer(s) kept an existing key because no IK resolved this run",
+            report.key_preserved,
+        )
     if not report.ok:
         log.error("skipped %d record(s): %s", len(report.skipped), report.skipped[:5])
         return 1

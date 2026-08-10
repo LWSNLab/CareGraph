@@ -5,6 +5,7 @@ package auth
 import (
 	"net/http"
 
+	"github.com/LWSNLab/caregraph/internal/httpx"
 	"github.com/LWSNLab/caregraph/internal/infrastructure"
 	"github.com/gin-gonic/gin"
 )
@@ -18,9 +19,8 @@ func APIKeyMiddleware(cfg infrastructure.Config) gin.HandlerFunc {
 	_ = cfg // reserved for the hashed-key store and rate limiter
 	return func(c *gin.Context) {
 		if c.GetHeader("X-API-Key") == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Unauthorized: Invalid API Key provided",
-			})
+			httpx.Abort(c, http.StatusUnauthorized, httpx.CodeUnauthorized,
+				"Unauthorized: Invalid API Key provided")
 			return
 		}
 		c.Next()
