@@ -9,7 +9,7 @@ dependencies = [
     "beautifulsoup4>=4.15.0",
     "playwright>=1.62.0",
     "polars>=1.43.2",
-    "requests>=2.32",
+    "requests>=2.34.2",
     "psycopg[binary]>=3.3.4",
     # Lets requests verify against the OS trust store instead of certifi's
     # bundle. Needed wherever a TLS-inspecting proxy re-signs traffic with a
