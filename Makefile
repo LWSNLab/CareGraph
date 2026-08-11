@@ -47,3 +47,9 @@ fmt: ## Format Go code
 
 pipelines: ## Sync Python pipeline dependencies
 	cd pipelines && uv sync
+
+apikey-dev: ## Issue a local API key for development (prints it once)
+	go run ./cmd/apikey issue --name "Local Dev" --tier community
+
+apikeys: ## List API keys
+	go run ./cmd/apikey list

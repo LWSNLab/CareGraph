@@ -24,8 +24,9 @@ jobs:
     name: Go (build · vet · test)
     runs-on: ubuntu-latest
 
-    # PostGIS for the repository's integration tests. Without it they skip, and
-    # the ST_DWithin query — the part most likely to break — would go untested.
+    # PostGIS for the repository's integration tests, Redis for the rate
+    # limiter's. Without them those tests skip, leaving the ST_DWithin query and
+    # the token-bucket Lua script — the two parts most likely to break — untested.
     services:
       postgres:
         image: postgis/postgis:16-3.4
@@ -41,8 +42,19 @@ jobs:
           --health-timeout 5s
           --health-retries 20
 
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     env:
       CAREGRAPH_TEST_DSN: postgres://caregraph:caregraph@localhost:5432/caregraph?sslmode=disable
+      CAREGRAPH_TEST_REDIS: localhost:6379
 
     steps:
       - uses: actions/checkout@v7
