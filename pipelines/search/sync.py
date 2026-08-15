@@ -151,11 +151,18 @@ class TypesenseClient:
         return self._call("GET", f"/collections/{name}").json().get("num_documents", 0)
 
 
-def sync_index(dsn: str, url: str, api_key: str, keep: int = 1) -> SyncReport:
-    """Rebuild the index and point the alias at it.
+def sync_index(
+    dsn: str, url: str, api_key: str, keep: int = 1, alias: str = ALIAS
+) -> SyncReport:
+    """Rebuild the index and point `alias` at it.
 
     `keep` older collections are retained so an operator can roll the alias back
     by hand if a rebuild turns out to have indexed something wrong.
+
+    `alias` is a parameter so tests can publish somewhere else. They share a
+    Typesense instance with development, and an earlier version wrote to the
+    production alias — a test run left the developer's index holding five seeded
+    rows, and search silently returned nothing until someone looked at `out_of`.
     """
     client = TypesenseClient(url, api_key)
     if not client.health():
@@ -163,7 +170,7 @@ def sync_index(dsn: str, url: str, api_key: str, keep: int = 1) -> SyncReport:
 
     # Random suffix, not just a timestamp: two runs inside the same second
     # collided with a 409 and left the first one's collection behind.
-    collection = f"{ALIAS}_{datetime.now(UTC):%Y%m%d%H%M%S}_{secrets.token_hex(3)}"
+    collection = f"{alias}_{datetime.now(UTC):%Y%m%d%H%M%S}_{secrets.token_hex(3)}"
     started = time.perf_counter()
     client.create_collection(collection)
 
@@ -196,8 +203,8 @@ def sync_index(dsn: str, url: str, api_key: str, keep: int = 1) -> SyncReport:
             "Has the ingestion run?"
         )
 
-    client.upsert_alias(ALIAS, collection)
-    _prune(client, collection, keep)
+    client.upsert_alias(alias, collection)
+    _prune(client, collection, keep, alias)
 
     report = SyncReport(collection, documents, time.perf_counter() - started, dropped)
     if dropped:
@@ -234,11 +241,11 @@ def _document(row: dict) -> dict:
     return document
 
 
-def _prune(client: TypesenseClient, current: str, keep: int) -> None:
+def _prune(client: TypesenseClient, current: str, keep: int, alias: str = ALIAS) -> None:
     """Drop superseded collections, keeping the newest `keep` for rollback."""
     older = sorted(
         (c for c in client.list_collections()
-         if c.startswith(f"{ALIAS}_") and c != current),
+         if c.startswith(f"{alias}_") and c != current),
         reverse=True,
     )
     for name in older[keep:]:

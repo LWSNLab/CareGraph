@@ -359,3 +359,64 @@ func TestNearIntegration(t *testing.T) {
 		}
 	})
 }
+
+func TestBySourceIDsPreservesTheGivenOrder(t *testing.T) {
+	pool := testPool(t)
+	seed(t, pool, standardFixtures())
+	repo := NewPostgresRepository(pool)
+	ctx := context.Background()
+
+	// Deliberately not the insertion order: `WHERE source_id = ANY(…)` returns
+	// rows however the planner likes, which would silently discard the ranking a
+	// search engine just computed. `array_position` is what restores it.
+	want := []string{
+		fixturePrefix + "far",
+		fixturePrefix + "near",
+		fixturePrefix + "edge",
+		fixturePrefix + "mid",
+	}
+
+	got, err := repo.BySourceIDs(ctx, want)
+	if err != nil {
+		t.Fatalf("BySourceIDs: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d rows, want %d", len(got), len(want))
+	}
+
+	expected := []string{"Fixture Far", "Fixture Near", "Fixture Edge", "Fixture Mid"}
+	for i, name := range expected {
+		if got[i].Name != name {
+			t.Fatalf("position %d = %q, want %q (full: %v)", i, got[i].Name, name, names(got))
+		}
+	}
+}
+
+func TestBySourceIDsSkipsIdentifiersWithNoRow(t *testing.T) {
+	// The index can briefly hold a row the database no longer has. A stale hit
+	// should disappear from the results, not fail the whole request.
+	pool := testPool(t)
+	seed(t, pool, standardFixtures())
+	repo := NewPostgresRepository(pool)
+
+	got, err := repo.BySourceIDs(context.Background(), []string{
+		fixturePrefix + "near", "stoid:does-not-exist", fixturePrefix + "mid",
+	})
+	if err != nil {
+		t.Fatalf("BySourceIDs: %v", err)
+	}
+	if len(got) != 2 || got[0].Name != "Fixture Near" || got[1].Name != "Fixture Mid" {
+		t.Errorf("got %v, want the two that exist, in order", names(got))
+	}
+}
+
+func TestBySourceIDsWithNoIdentifiersIsAnEmptySliceNotNil(t *testing.T) {
+	pool := testPool(t)
+	got, err := NewPostgresRepository(pool).BySourceIDs(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Error("got nil, want an empty slice")
+	}
+}

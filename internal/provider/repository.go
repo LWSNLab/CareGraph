@@ -22,6 +22,8 @@ type Repository interface {
 	Near(ctx context.Context, p NearParams) ([]Provider, error)
 	// GetByIK returns a single provider by its Institutionskennzeichen.
 	GetByIK(ctx context.Context, ik string) (*Provider, error)
+	// BySourceIDs returns providers in the order the identifiers were given.
+	BySourceIDs(ctx context.Context, sourceIDs []string) ([]Provider, error)
 }
 
 // PostgresRepository implements Repository against PostgreSQL/PostGIS.
@@ -109,6 +111,51 @@ const getByIKQuery = `
 SELECT ` + providerColumns + `
 FROM   care_infrastructure
 WHERE  ik_nummer = $1`
+
+// bySourceIDsQuery hydrates search hits.
+//
+// `array_position` is the load-bearing part. `WHERE source_id = ANY(…)` returns
+// rows in whatever order the planner likes, which would discard the ranking the
+// search engine just computed — and a search that returns its results in
+// arbitrary order is not a search. Ordering by each id's position in the input
+// array restores it exactly.
+var bySourceIDsQuery = fmt.Sprintf(`
+SELECT %s
+FROM   care_infrastructure
+WHERE  source_id = ANY($1)
+ORDER  BY array_position($1, source_id)`, providerColumns)
+
+// BySourceIDs returns the given providers in the order the identifiers were
+// passed. Identifiers with no row are skipped rather than reported: the index
+// can briefly hold a row the database no longer has, and a stale hit should
+// vanish from the results, not fail the request.
+func (r *PostgresRepository) BySourceIDs(ctx context.Context, sourceIDs []string) ([]Provider, error) {
+	if len(sourceIDs) == 0 {
+		return []Provider{}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	rows, err := r.pool.Query(ctx, bySourceIDsQuery, sourceIDs)
+	if err != nil {
+		return nil, fmt.Errorf("hydrate search hits: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]Provider, 0, len(sourceIDs))
+	for rows.Next() {
+		var p Provider
+		if err := scanProvider(rows, &p); err != nil {
+			return nil, err
+		}
+		results = append(results, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("hydrate search rows: %w", err)
+	}
+	return results, nil
+}
 
 // GetByIK implements GET /v1/infrastructure/:ik_nummer. A missing row is
 // (nil, nil) — absence is a valid answer to a lookup, not a failure.

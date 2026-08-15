@@ -18,6 +18,7 @@ import (
 	"github.com/LWSNLab/caregraph/internal/infrastructure"
 	"github.com/LWSNLab/caregraph/internal/provider"
 	"github.com/LWSNLab/caregraph/internal/ratelimit"
+	"github.com/LWSNLab/caregraph/internal/search"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
@@ -65,8 +66,17 @@ func main() {
 	}
 
 	repo := provider.NewPostgresRepository(pool)
-	handler := provider.NewHandler(repo)
 	keys := auth.NewPostgresKeyStore(pool)
+
+	searchClient := search.NewTypesenseClient(cfg.TypesenseURL, cfg.TypesenseKey)
+	handler := provider.NewHandler(repo).WithSearch(searchClient)
+
+	// Reported once at startup for the same reason as Redis: /search answers 503
+	// when the engine is down, and an operator should learn that from a log line
+	// rather than from the first user who tries to search.
+	if err := searchClient.Ping(context.Background()); err != nil {
+		slog.Warn("search engine unreachable — /search will answer 503", "error", err)
+	}
 
 	r := gin.New()
 
