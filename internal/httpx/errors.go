@@ -25,6 +25,7 @@ const (
 	CodeRateLimited      ErrorCode = "rate_limited"
 	CodeTimeout          ErrorCode = "timeout"
 	CodeNotImplemented   ErrorCode = "not_implemented"
+	CodeUnavailable      ErrorCode = "unavailable"
 	CodeInternal         ErrorCode = "internal"
 )
 

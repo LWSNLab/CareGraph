@@ -7,18 +7,31 @@ import (
 	"net/http"
 
 	"github.com/LWSNLab/caregraph/internal/httpx"
+	"github.com/LWSNLab/caregraph/internal/search"
 	"github.com/gin-gonic/gin"
 )
 
 // Handler exposes the provider domain over HTTP (Gin).
 type Handler struct {
-	repo Repository
-	log  *slog.Logger
+	repo   Repository
+	search search.Client
+	log    *slog.Logger
 }
 
 // NewHandler wires HTTP handlers over a Repository, logging to slog.Default().
+//
+// The search client is optional: without one `/search` answers 501, which is
+// what it did before the engine existed. That keeps the gateway runnable for
+// anyone who does not want to operate Typesense.
 func NewHandler(repo Repository) *Handler {
 	return &Handler{repo: repo, log: slog.Default()}
+}
+
+// WithSearch returns a copy of h that serves /search from the given engine.
+func (h *Handler) WithSearch(client search.Client) *Handler {
+	c := *h
+	c.search = client
+	return &c
 }
 
 // WithLogger returns a copy of h that logs to l.
@@ -52,15 +65,76 @@ func (h *Handler) Near(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"total": len(results), "data": results})
 }
 
-// Search handles GET /v1/infrastructure/search — fuzzy text search (Typesense).
-// TODO: wire internal/search.Client (E3-S2).
+// Search handles GET /v1/infrastructure/search — typo-tolerant text search.
+//
+// Two stages: the engine ranks, Postgres fills in. The index holds a subset of
+// the fields, so answering from it directly would give this endpoint a different
+// response shape from /near; hydrating keeps one schema and one source of truth.
 func (h *Handler) Search(c *gin.Context) {
-	if len(c.Query("q")) < 2 {
-		httpx.Fail(c, http.StatusBadRequest, httpx.CodeInvalidParameter,
-			"parameter 'q' must be at least 2 characters")
+	params, err := ParseSearchParams(c.Request.URL.Query())
+	if err != nil {
+		httpx.Fail(c, http.StatusBadRequest, httpx.CodeInvalidParameter, err.Error())
 		return
 	}
-	httpx.Fail(c, http.StatusNotImplemented, httpx.CodeNotImplemented, "search not implemented")
+
+	if h.search == nil {
+		httpx.Fail(c, http.StatusNotImplemented, httpx.CodeNotImplemented,
+			"search is not configured on this deployment")
+		return
+	}
+
+	query := search.Query{Text: params.Query, City: params.City, Limit: params.Limit}
+	if params.Type != nil {
+		query.Type = string(*params.Type)
+	}
+
+	hits, err := h.search.Search(c.Request.Context(), query)
+	if err != nil {
+		h.respondSearchErr(c, err)
+		return
+	}
+
+	results, err := h.repo.BySourceIDs(c.Request.Context(), hits.IDs)
+	if err != nil {
+		h.respondRepoErr(c, err)
+		return
+	}
+	if results == nil {
+		results = []Provider{}
+	}
+
+	// `total` is the engine's match count, not len(data): it is what a client
+	// needs to know there is more behind the limit.
+	c.JSON(http.StatusOK, gin.H{"total": hits.Found, "data": results})
+}
+
+// respondSearchErr maps an engine failure. Unreachable is 503, not 500: nothing
+// is broken in the request or in this service, the feature is temporarily
+// impossible and retrying is the right response.
+func (h *Handler) respondSearchErr(c *gin.Context, err error) {
+	ctx := c.Request.Context()
+	log := httpx.Logger(h.log, c).With(
+		"path", c.Request.URL.Path, "query", c.Request.URL.RawQuery, "error", err)
+
+	switch {
+	case errors.Is(err, context.Canceled) && ctx.Err() != nil:
+		log.DebugContext(ctx, "client disconnected during search")
+		c.AbortWithStatus(httpx.StatusClientClosedRequest)
+
+	case errors.Is(err, context.DeadlineExceeded):
+		log.ErrorContext(ctx, "search timed out")
+		httpx.Fail(c, http.StatusGatewayTimeout, httpx.CodeTimeout,
+			"the search took too long, please retry")
+
+	case errors.Is(err, search.ErrUnavailable):
+		log.ErrorContext(ctx, "search engine unavailable")
+		httpx.Fail(c, http.StatusServiceUnavailable, httpx.CodeUnavailable,
+			"search is temporarily unavailable, please retry")
+
+	default:
+		log.ErrorContext(ctx, "search failed")
+		httpx.Fail(c, http.StatusInternalServerError, httpx.CodeInternal, "internal error")
+	}
 }
 
 // GetByIK handles GET /v1/infrastructure/:ik_nummer.

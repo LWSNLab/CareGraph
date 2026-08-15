@@ -175,3 +175,80 @@ func finite(v string) (float64, bool) {
 func value(q url.Values, key string) string {
 	return strings.TrimSpace(q.Get(key))
 }
+
+// Bounds of the text search, mirroring the published contract.
+const (
+	MinQueryLen       = 2
+	MaxQueryLen       = 128
+	DefaultSearchSize = 20
+)
+
+// SearchParams is a validated text query.
+type SearchParams struct {
+	Query string
+	City  string
+	Type  *Type
+	Limit int
+}
+
+// ParseSearchParams validates a query string into SearchParams.
+func ParseSearchParams(q url.Values) (SearchParams, error) {
+	p := SearchParams{Limit: DefaultSearchSize}
+
+	p.Query = value(q, "q")
+	if len(p.Query) < MinQueryLen {
+		return p, &ParamError{
+			Param:   "q",
+			Message: fmt.Sprintf("must be at least %d characters", MinQueryLen),
+		}
+	}
+	// Capped so a client cannot hand the engine an unbounded string to tokenise.
+	if len(p.Query) > MaxQueryLen {
+		return p, &ParamError{
+			Param:   "q",
+			Message: fmt.Sprintf("must be at most %d characters", MaxQueryLen),
+		}
+	}
+
+	p.City = value(q, "city")
+	if len(p.City) > MaxQueryLen {
+		return p, &ParamError{
+			Param:   "city",
+			Message: fmt.Sprintf("must be at most %d characters", MaxQueryLen),
+		}
+	}
+
+	if v := value(q, "limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return p, &ParamError{Param: "limit", Message: "must be an integer"}
+		}
+		if n < 1 || n > MaxLimit {
+			return p, &ParamError{
+				Param:   "limit",
+				Message: fmt.Sprintf("must be between 1 and %d", MaxLimit),
+			}
+		}
+		p.Limit = n
+	}
+
+	// Validated against the enum before it reaches the engine's filter syntax,
+	// so only known values are ever interpolated there.
+	if v := value(q, "type"); v != "" {
+		t := Type(v)
+		if !t.Valid() {
+			return p, &ParamError{Param: "type", Message: "must be one of: " + typeNames()}
+		}
+		p.Type = &t
+	}
+
+	return p, nil
+}
+
+func typeNames() string {
+	names := make([]string, 0, len(AllTypes()))
+	for _, known := range AllTypes() {
+		names = append(names, string(known))
+	}
+	return strings.Join(names, ", ")
+}

@@ -29,6 +29,10 @@ type fakeRepo struct {
 	ikCalled bool
 	ikResult *Provider
 	ikErr    error
+
+	gotIDs     []string
+	byIDResult []Provider
+	byIDErr    error
 }
 
 func (f *fakeRepo) Near(_ context.Context, p NearParams) ([]Provider, error) {
@@ -39,6 +43,11 @@ func (f *fakeRepo) Near(_ context.Context, p NearParams) ([]Provider, error) {
 func (f *fakeRepo) GetByIK(_ context.Context, ik string) (*Provider, error) {
 	f.gotIK, f.ikCalled = ik, true
 	return f.ikResult, f.ikErr
+}
+
+func (f *fakeRepo) BySourceIDs(_ context.Context, ids []string) ([]Provider, error) {
+	f.gotIDs = ids
+	return f.byIDResult, f.byIDErr
 }
 
 func newTestServer(repo Repository) *gin.Engine {

@@ -13,7 +13,6 @@ import os
 import pytest
 
 from pipelines.search.sync import (
-    ALIAS,
     INDEXED_TYPES,
     SCHEMA_FIELDS,
     TypesenseClient,
@@ -27,6 +26,11 @@ TYPESENSE_URL = os.environ.get("CAREGRAPH_TEST_TYPESENSE")
 DSN = os.environ.get("CAREGRAPH_TEST_DSN")
 integration = pytest.mark.skipif(
     not (TYPESENSE_URL and DSN), reason="CAREGRAPH_TEST_TYPESENSE/DSN not set")
+
+# Never the production alias. These tests share a Typesense instance with
+# development, and publishing to `providers` replaced a real 9,099-document
+# index with five seeded rows — search then returned nothing, with a 200.
+TEST_ALIAS = "providers_pytest"
 
 ROW = {
     "source_id": "osm:node/1",
@@ -103,8 +107,8 @@ def client():
 def test_sync_publishes_an_alias_and_prunes_old_collections(client, seeded_providers):
     key = os.environ.get("CAREGRAPH_TEST_TYPESENSE_KEY", "devkey")
 
-    first = sync_index(DSN, TYPESENSE_URL, key, keep=1)
-    second = sync_index(DSN, TYPESENSE_URL, key, keep=1)
+    first = sync_index(DSN, TYPESENSE_URL, key, keep=1, alias=TEST_ALIAS)
+    second = sync_index(DSN, TYPESENSE_URL, key, keep=1, alias=TEST_ALIAS)
 
     assert second.collection != first.collection, "rebuild reused a collection name"
     assert second.documents == first.documents
@@ -113,11 +117,11 @@ def test_sync_publishes_an_alias_and_prunes_old_collections(client, seeded_provi
 
     # The alias must point at the newest, or readers keep seeing stale data.
     aliases = client._call("GET", "/aliases").json()["aliases"]
-    current = next(a for a in aliases if a["name"] == ALIAS)
+    current = next(a for a in aliases if a["name"] == TEST_ALIAS)
     assert current["collection_name"] == second.collection
 
     # keep=1 retains exactly one superseded collection for a manual rollback.
-    kept = [c for c in client.list_collections() if c.startswith(f"{ALIAS}_")]
+    kept = [c for c in client.list_collections() if c.startswith(f"{TEST_ALIAS}_")]
     assert len(kept) == 2, kept
 
 
@@ -132,7 +136,8 @@ def test_a_failed_rebuild_leaves_no_orphan_collection(client, monkeypatch, seede
     monkeypatch.setattr(TypesenseClient, "import_documents", explode)
     with pytest.raises(TypesenseError):
         sync_index(DSN, TYPESENSE_URL,
-                   os.environ.get("CAREGRAPH_TEST_TYPESENSE_KEY", "devkey"))
+                   os.environ.get("CAREGRAPH_TEST_TYPESENSE_KEY", "devkey"),
+                   alias=TEST_ALIAS)
 
     assert set(client.list_collections()) == before, "a partial collection was left behind"
 
@@ -141,23 +146,23 @@ def test_a_failed_rebuild_leaves_no_orphan_collection(client, monkeypatch, seede
 def test_an_empty_result_never_replaces_a_working_index(client, monkeypatch, seeded_providers):
     """Publishing an empty index would take search down and report success."""
     key = os.environ.get("CAREGRAPH_TEST_TYPESENSE_KEY", "devkey")
-    sync_index(DSN, TYPESENSE_URL, key)
+    sync_index(DSN, TYPESENSE_URL, key, alias=TEST_ALIAS)
     aliases = client._call("GET", "/aliases").json()["aliases"]
-    before = next(a for a in aliases if a["name"] == ALIAS)["collection_name"]
+    before = next(a for a in aliases if a["name"] == TEST_ALIAS)["collection_name"]
 
     monkeypatch.setattr("pipelines.search.sync.SELECT_SQL",
                         "SELECT source_id, name, type::text AS type, parent_organization,"
                         " strasse, plz, ort, bundesland, NULL::float AS lat, NULL::float AS lon"
                         " FROM care_infrastructure WHERE false")
     with pytest.raises(TypesenseError, match="refusing to publish an empty index"):
-        sync_index(DSN, TYPESENSE_URL, key)
+        sync_index(DSN, TYPESENSE_URL, key, alias=TEST_ALIAS)
 
     aliases = client._call("GET", "/aliases").json()["aliases"]
-    after = next(a for a in aliases if a["name"] == ALIAS)["collection_name"]
+    after = next(a for a in aliases if a["name"] == TEST_ALIAS)["collection_name"]
     assert after == before, "the alias moved to an empty index"
 
 
 @integration
 def test_an_unreachable_typesense_is_reported_not_swallowed():
     with pytest.raises(TypesenseError, match="not reachable"):
-        sync_index(DSN, "http://127.0.0.1:1", "devkey")
+        sync_index(DSN, "http://127.0.0.1:1", "devkey", alias=TEST_ALIAS)
