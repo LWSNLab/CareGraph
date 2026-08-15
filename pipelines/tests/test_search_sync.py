@@ -21,6 +21,7 @@ from pipelines.search.sync import (
     _document,
     sync_index,
 )
+from pipelines.tests.conftest import SEED_PREFIX  # noqa: F401  (fixture module)
 
 TYPESENSE_URL = os.environ.get("CAREGRAPH_TEST_TYPESENSE")
 DSN = os.environ.get("CAREGRAPH_TEST_DSN")
@@ -99,7 +100,7 @@ def client():
 
 
 @integration
-def test_sync_publishes_an_alias_and_prunes_old_collections(client):
+def test_sync_publishes_an_alias_and_prunes_old_collections(client, seeded_providers):
     key = os.environ.get("CAREGRAPH_TEST_TYPESENSE_KEY", "devkey")
 
     first = sync_index(DSN, TYPESENSE_URL, key, keep=1)
@@ -107,6 +108,7 @@ def test_sync_publishes_an_alias_and_prunes_old_collections(client):
 
     assert second.collection != first.collection, "rebuild reused a collection name"
     assert second.documents == first.documents
+    assert second.documents >= len(seeded_providers)
     assert second.ok
 
     # The alias must point at the newest, or readers keep seeing stale data.
@@ -120,7 +122,7 @@ def test_sync_publishes_an_alias_and_prunes_old_collections(client):
 
 
 @integration
-def test_a_failed_rebuild_leaves_no_orphan_collection(client, monkeypatch):
+def test_a_failed_rebuild_leaves_no_orphan_collection(client, monkeypatch, seeded_providers):
     """A half-built collection is litter that accumulates on every retry."""
     before = set(client.list_collections())
 
@@ -136,7 +138,7 @@ def test_a_failed_rebuild_leaves_no_orphan_collection(client, monkeypatch):
 
 
 @integration
-def test_an_empty_result_never_replaces_a_working_index(client, monkeypatch):
+def test_an_empty_result_never_replaces_a_working_index(client, monkeypatch, seeded_providers):
     """Publishing an empty index would take search down and report success."""
     key = os.environ.get("CAREGRAPH_TEST_TYPESENSE_KEY", "devkey")
     sync_index(DSN, TYPESENSE_URL, key)

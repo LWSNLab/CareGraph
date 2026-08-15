@@ -229,41 +229,6 @@ def test_latest_migration_survives_an_empty_directory(tmp_path):
 # tests the machine, not the code.
 
 
-@pytest.fixture
-def seeded(tmp_path):
-    """Insert a handful of providers through the real loader, then remove them."""
-    import psycopg
-
-    from pipelines.load.postgres_loader import PostgresLoader
-
-    def purge():
-        with psycopg.connect(DSN) as conn:
-            conn.execute(
-                "DELETE FROM care_infrastructure WHERE source_id LIKE 'test:dataset:%'")
-            conn.commit()
-
-    purge()
-    records = [
-        {
-            "source_id": f"test:dataset:{n}",
-            "type": "pflegeheim_stationaer",
-            "name": f"PyTest Dataset Heim {n}",
-            "strasse": "Teststraße 1" if n % 2 else None,
-            "plz": "10115" if n % 2 else None,
-            "ort": "Berlin" if n % 2 else None,
-            "bundesland": "Berlin",
-            "website": "example.de" if n % 2 else None,
-            "details": {"source": "test", "attribution": "test"},
-            "lat": 52.5 + n / 1000,
-            "lon": 13.4 + n / 1000,
-        }
-        for n in range(5)
-    ]
-    PostgresLoader(DSN).load_providers(records)
-    yield records
-    purge()
-
-
 @integration
 def test_export_refuses_to_write_an_empty_dataset(tmp_path, monkeypatch):
     """An empty archive is worse than none: it looks like a valid release.
@@ -284,9 +249,9 @@ def test_export_refuses_to_write_an_empty_dataset(tmp_path, monkeypatch):
 
 
 @integration
-def test_export_then_import_is_a_faithful_round_trip(tmp_path, seeded):
+def test_export_then_import_is_a_faithful_round_trip(tmp_path, seeded_providers):
     result = export_dataset(DSN, tmp_path / "round.tar.gz")
-    assert result.row_count >= len(seeded)
+    assert result.row_count >= len(seeded_providers)
 
     manifest, records = read_archive(result.path)
     assert manifest["row_count"] == result.row_count
@@ -298,7 +263,7 @@ def test_export_then_import_is_a_faithful_round_trip(tmp_path, seeded):
             archive.getnames())
 
     exported = {r["source_id"]: r for r in records}
-    for original in seeded:
+    for original in seeded_providers:
         got = exported.get(original["source_id"])
         assert got is not None, f"{original['source_id']} did not survive the export"
         assert got["name"] == original["name"]
@@ -313,7 +278,7 @@ def test_export_then_import_is_a_faithful_round_trip(tmp_path, seeded):
 
 
 @integration
-def test_reimporting_an_export_changes_nothing(tmp_path, seeded):
+def test_reimporting_an_export_changes_nothing(tmp_path, seeded_providers):
     """The whole point: a self-hoster can re-run the import without duplicating."""
     result = export_dataset(DSN, tmp_path / "again.tar.gz")
     report = import_dataset(DSN, result.path).report
