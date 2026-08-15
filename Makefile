@@ -53,3 +53,23 @@ apikey-dev: ## Issue a local API key for development (prints it once)
 
 apikeys: ## List API keys
 	go run ./cmd/apikey list
+
+dataset-export: ## Export the provider dataset as a redistributable archive
+	uv run --project pipelines python -m pipelines.run_dataset export
+
+dataset-import: ## Import a dataset archive (FILE=dist/....tar.gz)
+	@test -n "$(FILE)" || (echo "usage: make dataset-import FILE=dist/caregraph-providers-YYYY-MM-DD.tar.gz" && exit 1)
+	uv run --project pipelines python -m pipelines.run_dataset import --file "$(FILE)"
+
+bootstrap: ## Fresh install: schema + dataset (FILE=...) or full ingestion
+	@echo "1/2  applying migrations"
+	@$(MAKE) --no-print-directory migrate
+	@if [ -n "$(FILE)" ]; then \
+		echo "2/2  importing $(FILE)"; \
+		$(MAKE) --no-print-directory dataset-import FILE="$(FILE)"; \
+	else \
+		echo "2/2  no FILE given — run the ingestion instead:"; \
+		echo "       make load-providers   (needs pipelines/data/processed/providers.json)"; \
+		echo "       make load-insurers    (needs the GKV list PDF)"; \
+		echo "     or pass a release archive:  make bootstrap FILE=dist/....tar.gz"; \
+	fi
