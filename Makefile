@@ -61,17 +61,23 @@ dataset-import: ## Import a dataset archive (FILE=dist/....tar.gz)
 	@test -n "$(FILE)" || (echo "usage: make dataset-import FILE=dist/caregraph-providers-YYYY-MM-DD.tar.gz" && exit 1)
 	uv run --project pipelines python -m pipelines.run_dataset import --file "$(FILE)"
 
+search-sync: ## Rebuild the Typesense search index from Postgres
+	uv run --project pipelines python -m pipelines.run_search sync
+
 bootstrap: ## Fresh install: schema + dataset (FILE=...) or full ingestion
-	@echo "1/2  applying migrations"
+	@echo "1/3  applying migrations"
 	@$(MAKE) --no-print-directory migrate
 	@if [ -n "$(FILE)" ]; then \
-		echo "2/2  importing $(FILE)"; \
+		echo "2/3  importing $(FILE)"; \
 		$(MAKE) --no-print-directory dataset-import FILE="$(FILE)"; \
+		echo "3/3  building the search index"; \
+		$(MAKE) --no-print-directory search-sync; \
 	else \
-		echo "2/2  no FILE given — run the ingestion instead:"; \
+		echo "2/3  no FILE given — run the ingestion instead:"; \
 		echo "       make load-providers   (needs pipelines/data/processed/providers.json)"; \
 		echo "       make load-insurers    (needs the GKV list PDF)"; \
 		echo "     or pass a release archive:  make bootstrap FILE=dist/....tar.gz"; \
+		echo "     then:  make search-sync"; \
 	fi
 
 load-hospitals: ## Load the Bundes-Klinik-Atlas export (FILE=... , download it yourself)

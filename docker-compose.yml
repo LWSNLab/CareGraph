@@ -28,6 +28,17 @@ services:
   typesense:
     image: typesense/typesense:0.25.2
     command: ["--data-dir", "/data", "--api-key", "${TYPESENSE_API_KEY:-devkey}", "--enable-cors"]
+    # Loopback only, like redis: the dev key is `devkey`, so publishing this on
+    # 0.0.0.0 would hand write access to the index to the local network. The API
+    # reaches it over the `internal` network; this mapping is for running the
+    # sync worker and the gateway outside compose.
+    ports:
+      - "127.0.0.1:8108:8108"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8108/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     volumes:
       - typesense_data:/data
     networks: [internal]
