@@ -116,8 +116,18 @@ jobs:
           --health-timeout 5s
           --health-retries 20
 
+      typesense:
+        image: typesense/typesense:0.25.2
+        env:
+          TYPESENSE_API_KEY: devkey
+          TYPESENSE_DATA_DIR: /tmp
+        ports:
+          - 8108:8108
+
     env:
       CAREGRAPH_TEST_DSN: postgres://caregraph:caregraph@localhost:5432/caregraph?sslmode=disable
+      CAREGRAPH_TEST_TYPESENSE: http://localhost:8108
+      CAREGRAPH_TEST_TYPESENSE_KEY: devkey
 
     steps:
       - uses: actions/checkout@v7
@@ -146,6 +156,20 @@ jobs:
             echo "applying $migration"
             psql -h localhost -U caregraph -d caregraph -v ON_ERROR_STOP=1 -f "$migration"
           done
+
+      # The service container has no health check of its own, and the search
+      # tests skip when Typesense is unreachable — so without this they would
+      # quietly not run rather than fail.
+      - name: Wait for Typesense
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:8108/health >/dev/null; then
+              echo "typesense ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Typesense did not become ready"; exit 1
 
       - name: Test
         # Run from the repo root so `pipelines` imports as a package.
