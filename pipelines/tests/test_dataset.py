@@ -221,36 +221,103 @@ def test_latest_migration_survives_an_empty_directory(tmp_path):
 
 
 # ------------------------------------------------------------- integration
+#
+# These seed their own rows rather than exporting whatever happens to be in the
+# database. The first version asserted against ambient data: it passed locally
+# against a loaded database and failed in CI, where the schema is built from the
+# migrations and holds nothing. A test that depends on state it did not create
+# tests the machine, not the code.
+
+
+@pytest.fixture
+def seeded(tmp_path):
+    """Insert a handful of providers through the real loader, then remove them."""
+    import psycopg
+
+    from pipelines.load.postgres_loader import PostgresLoader
+
+    def purge():
+        with psycopg.connect(DSN) as conn:
+            conn.execute(
+                "DELETE FROM care_infrastructure WHERE source_id LIKE 'test:dataset:%'")
+            conn.commit()
+
+    purge()
+    records = [
+        {
+            "source_id": f"test:dataset:{n}",
+            "type": "pflegeheim_stationaer",
+            "name": f"PyTest Dataset Heim {n}",
+            "strasse": "Teststraße 1" if n % 2 else None,
+            "plz": "10115" if n % 2 else None,
+            "ort": "Berlin" if n % 2 else None,
+            "bundesland": "Berlin",
+            "website": "example.de" if n % 2 else None,
+            "details": {"source": "test", "attribution": "test"},
+            "lat": 52.5 + n / 1000,
+            "lon": 13.4 + n / 1000,
+        }
+        for n in range(5)
+    ]
+    PostgresLoader(DSN).load_providers(records)
+    yield records
+    purge()
 
 
 @integration
-def test_export_refuses_to_write_an_empty_dataset(tmp_path):
-    """An empty archive is worse than no archive: it looks like a valid release."""
-    import psycopg
+def test_export_refuses_to_write_an_empty_dataset(tmp_path, monkeypatch):
+    """An empty archive is worse than none: it looks like a valid release.
 
-    with psycopg.connect(DSN) as conn:
-        count = conn.execute(
-            "SELECT count(*) FROM care_infrastructure WHERE type <> 'krankenkasse'"
-        ).fetchone()[0]
-    if count:
-        pytest.skip("database holds providers; cannot test the empty case here")
-
+    The emptiness is forced by filtering everything out, so the test does not
+    depend on the database happening to be empty — which it never is locally and
+    always is in CI.
+    """
+    monkeypatch.setattr(
+        "pipelines.dataset.export.EXPORT_SQL",
+        "SELECT source_id, ik_nummer, type::text AS type, name, parent_organization,"
+        " website, strasse, plz, ort, bundesland, details::text AS details,"
+        " NULL::float AS lat, NULL::float AS lon"
+        "  FROM care_infrastructure WHERE false",
+    )
     with pytest.raises(ValueError, match="refusing to write an empty dataset"):
         export_dataset(DSN, tmp_path / "empty.tar.gz")
 
 
 @integration
-def test_export_then_import_is_a_faithful_round_trip(tmp_path):
+def test_export_then_import_is_a_faithful_round_trip(tmp_path, seeded):
     result = export_dataset(DSN, tmp_path / "round.tar.gz")
-    assert result.row_count > 0
+    assert result.row_count >= len(seeded)
 
     manifest, records = read_archive(result.path)
     assert manifest["row_count"] == result.row_count
     assert len(records) == result.row_count
-    # Every provider carries coordinates; losing them would break the radius API.
-    assert all(r["lat"] is not None and r["lon"] is not None for r in records)
-    assert all(r["source_id"] for r in records)
+
     # The archive must carry its own licence, not just the release page.
     with tarfile.open(result.path) as archive:
-        names = archive.getnames()
-    assert {"providers.csv", "MANIFEST.json", "LICENSE.txt", "README.md"} <= set(names)
+        assert {"providers.csv", "MANIFEST.json", "LICENSE.txt", "README.md"} <= set(
+            archive.getnames())
+
+    exported = {r["source_id"]: r for r in records}
+    for original in seeded:
+        got = exported.get(original["source_id"])
+        assert got is not None, f"{original['source_id']} did not survive the export"
+        assert got["name"] == original["name"]
+        assert got["lat"] == pytest.approx(original["lat"])
+        assert got["lon"] == pytest.approx(original["lon"])
+        # Rows seeded without an address must come back without one, not with "".
+        if original["strasse"] is None:
+            assert got["strasse"] is None
+        # The loader normalised the URL on the way in; that is what must ship.
+        if original["website"]:
+            assert got["website"].startswith("http")
+
+
+@integration
+def test_reimporting_an_export_changes_nothing(tmp_path, seeded):
+    """The whole point: a self-hoster can re-run the import without duplicating."""
+    result = export_dataset(DSN, tmp_path / "again.tar.gz")
+    report = import_dataset(DSN, result.path).report
+
+    assert report.inserted == 0, "re-importing an export inserted new rows"
+    assert report.updated == result.row_count
+    assert report.ok
