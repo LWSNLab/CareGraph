@@ -47,6 +47,7 @@ func AllTypes() []Type {
 		TypePflegedienstAmbulant,
 		TypePflegeheimStationaer,
 		TypePflegestuetzpunkt,
+		TypeKrankenhaus,
 	}
 }
 

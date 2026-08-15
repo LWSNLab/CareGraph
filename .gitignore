@@ -17,7 +17,14 @@ pipelines/.venv/
 pipelines/uv.lock
 
 # Pipeline data (raw downloads & generated outputs; overrides ARE tracked)
-pipelines/data/raw/*.pdf
+#
+# Everything downloaded from a source stays out of git, whatever its extension.
+# The previous `*.pdf` rule only covered the GKV list, so a 5.4 MB
+# Bundes-Klinik-Atlas export sat here untracked but not ignored — one `git add -A`
+# from entering the history of a repository that is heading for public. Raw
+# downloads also age; a file in git is a snapshot nobody re-fetches.
+pipelines/data/raw/*
+!pipelines/data/raw/.gitkeep
 pipelines/data/processed/
 
 # OS / IDE

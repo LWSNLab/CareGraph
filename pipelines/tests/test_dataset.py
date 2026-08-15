@@ -321,3 +321,41 @@ def test_reimporting_an_export_changes_nothing(tmp_path, seeded):
     assert report.inserted == 0, "re-importing an export inserted new rows"
     assert report.updated == result.row_count
     assert report.ok
+
+
+def test_only_odbl_sources_are_exportable():
+    """The archive ships under ODbL, so only OSM-derived rows belong in it.
+
+    Guards a defect that was live for one commit: the filter excluded
+    `krankenkasse` instead of listing what may go in, so adding hospitals put
+    1,577 Bundes-Klinik-Atlas rows — redistribution unsettled — into a file
+    labelled ODbL. Extending this set is a licence decision.
+    """
+    from pipelines.dataset.export import EXPORTABLE_TYPES
+
+    assert set(EXPORTABLE_TYPES) == {
+        "pflegedienst_ambulant",
+        "pflegeheim_stationaer",
+        "pflegestuetzpunkt",
+    }, "the exportable set changed — was the source's licence checked?"
+    assert "krankenhaus" not in EXPORTABLE_TYPES
+    assert "krankenkasse" not in EXPORTABLE_TYPES
+
+
+@integration
+def test_export_excludes_types_that_may_not_be_redistributed(tmp_path):
+    """Belt and braces: prove it against the real database, not just the constant."""
+    import psycopg
+
+    with psycopg.connect(DSN) as conn:
+        present = {r[0] for r in conn.execute(
+            "SELECT DISTINCT type::text FROM care_infrastructure").fetchall()}
+    if not {"krankenhaus", "krankenkasse"} & present:
+        pytest.skip("neither hospitals nor insurers loaded; nothing to exclude")
+
+    result = export_dataset(DSN, tmp_path / "licensed.tar.gz")
+    _, records = read_archive(result.path)
+    types = {r["type"] for r in records}
+
+    assert "krankenhaus" not in types, "hospitals leaked into an ODbL-licensed archive"
+    assert "krankenkasse" not in types, "insurers leaked into an ODbL-licensed archive"
