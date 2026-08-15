@@ -15,6 +15,7 @@ const (
 	TypePflegedienstAmbulant Type = "pflegedienst_ambulant"
 	TypePflegeheimStationaer Type = "pflegeheim_stationaer"
 	TypePflegestuetzpunkt    Type = "pflegestuetzpunkt"
+	TypeKrankenhaus          Type = "krankenhaus"
 )
 
 // Address is a structured postal address.

@@ -16,11 +16,24 @@ from psycopg.rows import dict_row
 
 log = logging.getLogger(__name__)
 
-# Providers only. The insurer rows are re-derived from a GKV publication whose
-# redistribution terms are not settled, and mixing sources in one archive would
-# make the file inherit the strictest of them. `make load-insurers` covers that
-# half from the official source. See E4-S5.
-EXPORT_WHERE = "type <> 'krankenkasse'"
+# Types this archive may contain, listed rather than excluded.
+#
+# An allowlist because the licence is a property of the *source*, not of the
+# table: the archive ships under ODbL, so only rows actually derived from
+# OpenStreetMap may be in it. The first version excluded `krankenkasse` instead,
+# which meant every type added later joined the archive silently — and one did.
+# Adding hospitals (E1-S9) would have put 1,577 Bundes-Klinik-Atlas rows, whose
+# redistribution terms are unsettled, into a file labelled ODbL.
+#
+# Adding a type here is therefore a licence decision, not a filter change.
+EXPORTABLE_TYPES = (
+    "pflegedienst_ambulant",
+    "pflegeheim_stationaer",
+    "pflegestuetzpunkt",
+)
+
+_TYPE_LIST = ", ".join(f"'{t}'" for t in EXPORTABLE_TYPES)
+EXPORT_WHERE = f"type::text IN ({_TYPE_LIST})"
 
 # Column order is the loader's record shape, so an import is a straight mapping.
 COLUMNS = (

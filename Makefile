@@ -73,3 +73,7 @@ bootstrap: ## Fresh install: schema + dataset (FILE=...) or full ingestion
 		echo "       make load-insurers    (needs the GKV list PDF)"; \
 		echo "     or pass a release archive:  make bootstrap FILE=dist/....tar.gz"; \
 	fi
+
+load-hospitals: ## Load the Bundes-Klinik-Atlas export (FILE=... , download it yourself)
+	@test -n "$(FILE)" || (echo "usage: make load-hospitals FILE=pipelines/data/raw/..._TVERZ_Export.xml" && echo "get it from https://bundes-klinik-atlas.de/open-data/" && exit 1)
+	uv run --project pipelines python -m pipelines.run_load hospitals --input "$(FILE)"

@@ -32,6 +32,25 @@ log = logging.getLogger("pipelines.run_load")
 DEFAULT_DSN = "postgres://caregraph_ingest:devingest@localhost:5433/caregraph?sslmode=disable"
 
 
+def load_hospitals(loader: PostgresLoader, path: Path):
+    """Load the Bundes-Klinik-Atlas export (story E1-S9).
+
+    The file is supplied by whoever runs this, not shipped with CareGraph — see
+    the story's licence note. Imported lazily so the other paths need no XML.
+    """
+    from pipelines.parsers.klinik_atlas import KlinikAtlasParser
+
+    parser = KlinikAtlasParser(path)
+    records = parser.parse()
+    print(f"📥 {len(records)} hospitals parsed from {path}")
+    if parser.report.unknown_land:
+        print(f"   ⚠️  unmapped federal-state codes: "
+              f"{', '.join(sorted(parser.report.unknown_land))}")
+    if parser.report.skipped:
+        print(f"   skipped: {len(parser.report.skipped)}")
+    return loader.load_providers(records)
+
+
 def load_providers(loader: PostgresLoader, path: Path):
     records = json.loads(path.read_text(encoding="utf-8"))
     print(f"📥 {len(records)} providers from {path}")
@@ -134,8 +153,9 @@ def load_insurers(
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Load ingested data into PostGIS.")
-    ap.add_argument("what", choices=["providers", "insurers"])
-    ap.add_argument("--input", type=Path, default=Path("pipelines/data/processed/providers.json"))
+    ap.add_argument("what", choices=["providers", "insurers", "hospitals"])
+    ap.add_argument("--input", type=Path, default=Path("pipelines/data/processed/providers.json"),
+                    help="providers JSON, or the Bundes-Klinik-Atlas XML for `hospitals`")
     ap.add_argument("--pdf", type=Path, default=Path("pipelines/data/raw/gkv_liste_2026.pdf"))
     ap.add_argument("--gueltig-ab", type=date.fromisoformat, default=date.today(),
                     help="Publication date of the insurer list (YYYY-MM-DD)")
@@ -167,6 +187,8 @@ def main() -> int:
     try:
         if args.what == "providers":
             report = load_providers(loader, args.input)
+        elif args.what == "hospitals":
+            report = load_hospitals(loader, args.input)
         else:
             report = load_insurers(
                 loader, args.pdf, args.gueltig_ab, args.expand_bundesweit,
