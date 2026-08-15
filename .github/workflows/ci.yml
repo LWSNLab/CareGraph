@@ -152,3 +152,19 @@ jobs:
         # Tests needing the (gitignored) GKV PDF skip themselves.
         working-directory: ${{ github.workspace }}
         run: uv run --project pipelines pytest pipelines/tests -q
+
+      # The release artefact is only useful if it round-trips. Building it in CI
+      # proves the export works against a schema built purely from migrations,
+      # which is the situation a self-hoster is in.
+      - name: Dataset export/import round trip
+        working-directory: ${{ github.workspace }}
+        env:
+          INGEST_DATABASE_URL: postgres://caregraph:caregraph@localhost:5432/caregraph?sslmode=disable
+        run: |
+          set -euo pipefail
+          uv run --project pipelines python -m pipelines.run_load providers \
+            --input pipelines/tests/fixtures/providers_sample.json
+          uv run --project pipelines python -m pipelines.run_dataset export \
+            --out /tmp/dataset.tar.gz
+          uv run --project pipelines python -m pipelines.run_dataset import \
+            --file /tmp/dataset.tar.gz

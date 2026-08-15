@@ -173,11 +173,17 @@ class PostgresLoader:
 
         name = (get("name") or "").strip()
         details = get("details") or {}
-        source_id = (
-            get("source_id")
-            if not isinstance(record, dict)
-            else f"osm:{details.get('osm_type')}/{details.get('osm_id')}"
-        )
+
+        # An explicit source_id wins. The dict branch used to derive `osm:…`
+        # unconditionally, which hardcoded one source into a loader that is
+        # otherwise source-agnostic: a record from any other origin would have
+        # been rekeyed as if it came from OpenStreetMap. Harmless until now — the
+        # scraper's records carry no source_id — but it blocks re-importing an
+        # exported dataset and would have mis-keyed the hospital directory.
+        source_id = get("source_id")
+        if not source_id and details.get("osm_id"):
+            source_id = f"osm:{details.get('osm_type')}/{details.get('osm_id')}"
+
         if not name or not source_id or "None" in str(source_id):
             return None
 
