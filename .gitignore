@@ -1,7 +1,14 @@
 # Go
 /bin/
 /out/
-/api
+# `/api` used to be here, for a binary dropped by a bare `go build -o api`. It
+# also matched the api/ directory — a gitignore pattern cannot tell the two
+# apart — so the OpenAPI contract and its tests were silently untracked.
+#
+# Now that api/ exists, `go build -o api` writes *into* it instead, so the
+# 28 MB binary lands next to the contract. That specific path is what needs
+# ignoring; the directory itself must stay tracked.
+/api/api
 *.exe
 *.test
 *.out

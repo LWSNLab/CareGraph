@@ -53,6 +53,9 @@ Smoke test — `/healthz` is public, everything under `/v1` needs the key:
 ```bash
 curl localhost:8080/healthz
 
+# The contract this build implements — no key needed
+curl localhost:8080/openapi.yaml
+
 curl -H "X-API-Key: cg_…" \
   'localhost:8080/v1/infrastructure/near?lat=52.52&lng=13.405&radius_km=5'
 ```
@@ -95,9 +98,11 @@ Pre-1.0, and honest about which parts are real:
 | :-- | :-- |
 | `GET /v1/infrastructure/near` | ✅ radius search over PostGIS, p95 ~10 ms |
 | `GET /v1/infrastructure/{ik_nummer}` | ✅ resolves the 92 insurers that have an IK |
-| `GET /v1/infrastructure/search` | ⏳ returns `501` — fuzzy search not built yet |
+| `GET /v1/infrastructure/search` | ✅ typo- and umlaut-tolerant via Typesense; `501` when no engine is configured |
+| `GET /openapi.yaml` | ✅ the contract, embedded in the binary and served unauthenticated |
 | API keys & rate limiting | ✅ Argon2id, Redis token bucket, per-tier quotas |
-| Ingestion | ✅ OSM providers, GKV insurer list, IK enrichment |
+| Ingestion | ✅ OSM providers, GKV insurer list, IK enrichment, Bundes-Klinik-Atlas hospitals |
+| `GET /healthz` | ⚠️ liveness only — a `200` does not mean the database is reachable |
 | Deduplication, address backfill | ⏳ planned |
 
 See the [documentation repo](https://github.com/LWSNLab/CareGraph_Doc) for the

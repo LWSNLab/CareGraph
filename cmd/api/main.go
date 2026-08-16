@@ -2,6 +2,9 @@
 // modular monolith. It wires infrastructure (config, DB) into the domain
 // modules (provider, search, auth) and serves the public REST API.
 //
+// The route table itself lives in internal/httpapi, where it can be built
+// without dependencies and compared against the OpenAPI contract in a test.
+//
 // See docs (LWSNLab/CareGraph_Doc): architecture/system-overview.md.
 package main
 
@@ -14,19 +17,13 @@ import (
 	"time"
 
 	"github.com/LWSNLab/caregraph/internal/auth"
-	"github.com/LWSNLab/caregraph/internal/httpx"
+	"github.com/LWSNLab/caregraph/internal/httpapi"
 	"github.com/LWSNLab/caregraph/internal/infrastructure"
 	"github.com/LWSNLab/caregraph/internal/provider"
 	"github.com/LWSNLab/caregraph/internal/ratelimit"
 	"github.com/LWSNLab/caregraph/internal/search"
-	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
-
-// requestTimeout bounds a whole request. Generous next to a p95 of ~9 ms: it
-// exists to stop a stalled dependency from pinning connections, not to police
-// normal traffic.
-const requestTimeout = 15 * time.Second
 
 // Server-level limits. Without them a client can hold a connection open by
 // trickling a request forever, and a slow reader can pin a response goroutine.
@@ -78,58 +75,14 @@ func main() {
 		slog.Warn("search engine unreachable — /search will answer 503", "error", err)
 	}
 
-	r := gin.New()
-
-	// A known path with the wrong method is a 405, not a 404. Gin only
-	// distinguishes the two when this is on, and fills in the Allow header.
-	r.HandleMethodNotAllowed = true
-
-	// Trust no proxy headers by default: ClientIP() then reports the peer that
-	// actually connected. With X-Forwarded-For trusted, anyone could spoof it and
-	// walk around the per-client failed-auth budget. A deployment behind a load
-	// balancer must set this to that balancer's address, and only that.
-	if err := r.SetTrustedProxies(nil); err != nil {
-		log.Fatalf("trusted proxies: %v", err)
-	}
-
-	// Order matters: RequestID first so everything downstream — including the
-	// recovery handler — can label its output with the correlation id.
-	r.Use(
-		httpx.RequestID(),
-		httpx.Recovery(slog.Default()),
-		gin.Logger(),
-		httpx.Timeout(requestTimeout),
-		auth.SecurityHeaders(),
-	)
-
-	// Framework-generated failures answer in the same shape as the handlers.
-	r.NoRoute(httpx.NoRoute())
-	r.NoMethod(httpx.NoMethod())
-
-	// Public: liveness / readiness probe.
-	r.GET("/healthz", handler.Health)
-
-	// Authenticated API surface (v1).
-	//
-	// Order is security-relevant.
-	//
-	// GuardAuthAttempts runs first and is *not* a quota: it checks whether this
-	// client has already exhausted its failed-authentication budget, so a stream
-	// of wrong secrets cannot keep Argon2id busy. It charges nothing on success,
-	// which is why it cannot cap a legitimate key — an earlier version enforced
-	// the community rate here and silently throttled enterprise keys to 100/min.
-	//
-	// The tier quota runs last, because the tier is only known once the key is.
-	v1 := r.Group("/v1")
-	v1.Use(
-		auth.GuardAuthAttempts(limiter, slog.Default()),
-		auth.APIKeyMiddleware(keys, limiter, slog.Default()),
-		auth.RateLimitByKey(limiter, slog.Default()),
-	)
-	{
-		v1.GET("/infrastructure/near", handler.Near)
-		v1.GET("/infrastructure/search", handler.Search)
-		v1.GET("/infrastructure/:ik_nummer", handler.GetByIK)
+	r, err := httpapi.NewRouter(httpapi.Deps{
+		Provider: handler,
+		Keys:     keys,
+		Limiter:  limiter,
+		Log:      slog.Default(),
+	})
+	if err != nil {
+		log.Fatalf("router: %v", err)
 	}
 
 	srv := &http.Server{

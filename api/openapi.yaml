@@ -1,0 +1,475 @@
+# CareGraph HTTP API — the canonical contract.
+#
+# This file lives next to the code it describes, and `api/spec_test.go` fails
+# the build when the two disagree: routes, error codes, provider types and the
+# actual JSON the handlers emit are all checked against it. A copy in another
+# repository could only be kept in sync by hand, which is how specs rot.
+#
+# Declared 3.0.3, not 3.1: the document uses `nullable`, which 3.1 removed. A
+# 3.1 header over 3.0 keywords is worse than either — generators drop what they
+# do not recognise, silently.
+openapi: 3.0.3
+
+info:
+  title: CareGraph API
+  description: |
+    Open Health & Care Infrastructure Graph for Germany — spatial radius search,
+    typo-tolerant text search, and standardised records for statutory insurers,
+    care providers and hospitals.
+
+    Served under `/v1`. The version is in the path, so a breaking change arrives
+    as `/v2` and never as a changed meaning of an existing field.
+  version: 1.0.0
+  contact:
+    name: CareGraph
+    url: https://caregraph.de
+    email: support@caregraph.de
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+# The server is the origin, and `/v1` is part of each path. The alternative —
+# folding `/v1` into the server URL — cannot express `/healthz`, which is served
+# at the root; an earlier revision of this file did exactly that and told
+# generated clients to call `/v1/healthz`.
+servers:
+  - url: https://api.caregraph.de
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Infrastructure
+    description: Query care infrastructure.
+  - name: System
+    description: Probes and the contract itself. No API key required.
+
+paths:
+  /v1/infrastructure/near:
+    get:
+      summary: Search nearby care infrastructure
+      description: |
+        Every entity whose location lies within `radius_km` of the given point,
+        nearest first, using the PostGIS spatial index. Each hit carries its
+        `distance_km`.
+      operationId: getNearbyInfrastructure
+      tags: [Infrastructure]
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          description: Latitude, WGS 84.
+          schema: { type: number, format: double, minimum: -90, maximum: 90, example: 48.7182 }
+        - name: lng
+          in: query
+          required: true
+          description: Longitude, WGS 84.
+          schema: { type: number, format: double, minimum: -180, maximum: 180, example: 10.7781 }
+        - name: radius_km
+          in: query
+          required: false
+          description: Search radius in kilometres.
+          schema: { type: number, format: double, exclusiveMinimum: true, minimum: 0, maximum: 100, default: 10, example: 15 }
+        - name: type
+          in: query
+          required: false
+          description: Restrict to one kind of entity.
+          schema: { $ref: '#/components/schemas/ProviderType' }
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of records returned.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          $ref: '#/components/responses/200InfrastructureList'
+        '400': { $ref: '#/components/responses/400BadRequest' }
+        '401': { $ref: '#/components/responses/401Unauthorized' }
+        '405': { $ref: '#/components/responses/405MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/429TooManyRequests' }
+        '499': { $ref: '#/components/responses/499ClientClosedRequest' }
+        '500': { $ref: '#/components/responses/500InternalServerError' }
+        '504': { $ref: '#/components/responses/504GatewayTimeout' }
+
+  /v1/infrastructure/search:
+    get:
+      summary: Typo-tolerant text search
+      description: |
+        Searches names, cities and operators, tolerating typos and umlauts
+        written plainly (`Charite` finds `Charité`, `Munster` finds `Münster`).
+
+        Two stages: the search engine ranks, PostgreSQL returns the records in
+        that order. A hit therefore has exactly the shape of one from
+        `/v1/infrastructure/near`, minus `distance_km` — one schema, one source
+        of truth.
+
+        `total` is the engine's match count, **not** the number of records in
+        `data`. Compare it with `limit` to learn whether there is more.
+      operationId: searchInfrastructure
+      tags: [Infrastructure]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Query text.
+          schema: { type: string, minLength: 2, maxLength: 128, example: "Caritas Pflegedienst" }
+        - name: city
+          in: query
+          required: false
+          description: Exact city filter, applied on top of the text query.
+          schema: { type: string, maxLength: 128, example: "Donauwörth" }
+        - name: type
+          in: query
+          required: false
+          description: Restrict to one kind of entity.
+          schema: { $ref: '#/components/schemas/ProviderType' }
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of records returned.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          $ref: '#/components/responses/200InfrastructureList'
+        '400': { $ref: '#/components/responses/400BadRequest' }
+        '401': { $ref: '#/components/responses/401Unauthorized' }
+        '405': { $ref: '#/components/responses/405MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/429TooManyRequests' }
+        '499': { $ref: '#/components/responses/499ClientClosedRequest' }
+        '500': { $ref: '#/components/responses/500InternalServerError' }
+        '501':
+          description: |
+            This deployment runs without a search engine. The rest of the API is
+            unaffected. Distinct from an empty result, which would claim that
+            nothing matched.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/503ServiceUnavailable' }
+        '504': { $ref: '#/components/responses/504GatewayTimeout' }
+
+  /v1/infrastructure/{ik_nummer}:
+    get:
+      summary: Fetch one institution by its Institutionskennzeichen
+      description: |
+        **Coverage caveat.** Every Leistungserbringer has an IK, but only the
+        statutory insurers' numbers are published anywhere public. Care
+        providers and hospitals carry no `ik_nummer` and cannot be addressed
+        here yet — reach them through `/v1/infrastructure/search` or
+        `/v1/infrastructure/near`.
+      operationId: getProviderByIK
+      tags: [Infrastructure]
+      parameters:
+        - name: ik_nummer
+          in: path
+          required: true
+          description: The official 9-digit Institutionskennzeichen.
+          schema: { type: string, pattern: '^[0-9]{9}$', example: "101576623" }
+      responses:
+        '200':
+          description: The institution carrying this IK number.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+            X-RateLimit-Limit: { $ref: '#/components/headers/X-RateLimit-Limit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CareProvider' }
+        '400': { $ref: '#/components/responses/400BadRequest' }
+        '401': { $ref: '#/components/responses/401Unauthorized' }
+        '404':
+          description: |
+            No institution carries this IK number. Distinct from `400`: the
+            number is well formed, it is simply not in the dataset.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '405': { $ref: '#/components/responses/405MethodNotAllowed' }
+        '429': { $ref: '#/components/responses/429TooManyRequests' }
+        '499': { $ref: '#/components/responses/499ClientClosedRequest' }
+        '500': { $ref: '#/components/responses/500InternalServerError' }
+        '504': { $ref: '#/components/responses/504GatewayTimeout' }
+
+
+  /healthz:
+    get:
+      summary: Liveness probe
+      description: |
+        Reports that the process is up. It does **not** probe PostgreSQL, Redis
+        or the search engine — a `200` here does not mean the API can serve
+        queries. Dependency checks are tracked as E4-S3.
+
+        Served at the origin, not under `/v1`: a probe is not part of the
+        versioned contract.
+      operationId: getHealth
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: The process is running.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok] }
+
+  /openapi.yaml:
+    get:
+      summary: This document
+      description: |
+        The contract as implemented by *this* instance, embedded in the binary
+        at build time. Fetch it to be certain which version you are talking to,
+        rather than trusting a published copy to match the deployment.
+      operationId: getOpenAPISpec
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Format `cg_<key_id>_<secret>`. The `key_id` half is a public identifier
+        and may be quoted in a support request; the secret half is shown once at
+        issuance and stored only as an Argon2id hash, so it cannot be recovered.
+
+        Missing, malformed and unknown keys all answer the same `401` — the
+        response never reveals whether a given key id exists.
+
+  headers:
+    X-Request-Id:
+      description: |
+        Correlation id for this request, repeated as `request_id` in every error
+        body. Send your own to stitch our logs to yours; it is echoed back when
+        it is at most 64 characters of `A–Z a–z 0–9 . _ -`, and replaced by a
+        generated id otherwise.
+      schema: { type: string, example: "0dfba0529a78773f16320ab786c125f9" }
+    X-RateLimit-Limit:
+      description: Requests permitted per minute for the presented key.
+      schema: { type: integer, example: 100 }
+    X-RateLimit-Remaining:
+      description: Tokens left in the current bucket.
+      schema: { type: integer, example: 98 }
+    Retry-After:
+      description: Seconds to wait before retrying.
+      schema: { type: integer, example: 3 }
+    Allow:
+      description: Methods this path does support.
+      schema: { type: string, example: GET }
+
+  schemas:
+    ProviderType:
+      type: string
+      description: The kind of entity. Mirrors the SQL enum `provider_type`.
+      enum:
+        - krankenkasse
+        - pflegedienst_ambulant
+        - pflegeheim_stationaer
+        - pflegestuetzpunkt
+        - krankenhaus
+
+    Address:
+      type: object
+      required: [street, postal_code, city]
+      properties:
+        street: { type: string, example: "Bahnhofstraße 12" }
+        postal_code: { type: string, example: "86609" }
+        city: { type: string, example: "Donauwörth" }
+        state:
+          type: string
+          description: Bundesland. Absent when the source does not give one.
+          example: "Bayern"
+
+    CareProvider:
+      type: object
+      description: |
+        One care-infrastructure entity.
+
+        **Optional fields are omitted, never `null`.** Test for the key's
+        presence, not for a null value.
+      required: [id, type, name, address]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Stable identifier for this record.
+          example: "c3b9a12e-1234-5678-90ab-cdef12345678"
+        ik_nummer:
+          type: string
+          pattern: '^[0-9]{9}$'
+          description: |
+            Institutionskennzeichen. Present for statutory insurers; absent for
+            care providers and hospitals, whose IKs no public source publishes.
+          # A real one — Techniker Krankenkasse. An invented IK in an example is
+          # the kind of thing that gets copied into a request and fails silently.
+          example: "101576623"
+        type: { $ref: '#/components/schemas/ProviderType' }
+        name:
+          type: string
+          example: "Ambulanter Pflegedienst Muster"
+        parent_organization:
+          type: string
+          description: Operator or umbrella organisation, when known.
+          example: "Caritasverband"
+        website:
+          type: string
+          format: uri
+          description: Absolute URL, normalised to include a scheme.
+          example: "https://pflegedienst-muster.de"
+        address: { $ref: '#/components/schemas/Address' }
+        distance_km:
+          type: number
+          format: double
+          description: |
+            Distance from the query point. Present only in
+            `/v1/infrastructure/near` responses.
+          example: 1.42
+        details:
+          type: object
+          additionalProperties: true
+          description: |
+            Source-specific fields that do not generalise across types — the
+            additional contribution rate for an insurer, the services offered by
+            a care provider. Not a stable contract; treat keys as optional.
+          example:
+            phone: "+49 906 123456"
+            services: [grundpflege, behandlungspflege, palliative]
+            zusatzbeitrag: 2.90
+
+    InfrastructureListResponse:
+      type: object
+      required: [total, data]
+      properties:
+        total:
+          type: integer
+          description: |
+            Number of matches. For `/search` this is the engine's count and may
+            exceed `len(data)`; for `/near` the two are equal.
+          example: 1
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/CareProvider' }
+
+    Error:
+      type: object
+      description: |
+        The body of every `4xx` and `5xx`, including the ones the framework
+        generates rather than a handler — unknown path, wrong method, panic. Any
+        failure can be parsed the same way.
+
+        **Branch on `code`, not on `error`.** The message is written for humans
+        and may be reworded; the code will not change.
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          example: "parameter 'lat' must be between -90 and 90"
+        code:
+          type: string
+          description: Stable identifier for the failure class.
+          enum:
+            - invalid_parameter
+            - unauthorized
+            - not_found
+            - method_not_allowed
+            - rate_limited
+            - timeout
+            - not_implemented
+            - unavailable
+            - internal
+          example: invalid_parameter
+        request_id:
+          type: string
+          description: Matches the `X-Request-Id` response header and the server's log records.
+          example: "0dfba0529a78773f16320ab786c125f9"
+
+  responses:
+    200InfrastructureList:
+      description: Matching records, in rank order.
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/X-Request-Id' }
+        X-RateLimit-Limit: { $ref: '#/components/headers/X-RateLimit-Limit' }
+        X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InfrastructureListResponse' }
+
+    400BadRequest:
+      description: |
+        A parameter is missing, malformed or out of range; the message names it.
+        An unparseable optional parameter is **rejected, not defaulted** —
+        `radius_km=abc` is a `400` rather than a silent 10 km search, which
+        would return authoritative-looking answers to a different question.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    401Unauthorized:
+      description: The API key is missing, malformed or unknown — one answer for all three.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    405MethodNotAllowed:
+      description: The path exists, this method does not.
+      headers:
+        Allow: { $ref: '#/components/headers/Allow' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    429TooManyRequests:
+      description: |
+        Either the tier quota is exhausted, or too many authentication attempts
+        failed from this address. The two budgets are separate: successful
+        requests never consume the failed-auth one.
+      headers:
+        Retry-After: { $ref: '#/components/headers/Retry-After' }
+        X-RateLimit-Limit: { $ref: '#/components/headers/X-RateLimit-Limit' }
+        X-RateLimit-Remaining: { $ref: '#/components/headers/X-RateLimit-Remaining' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    499ClientClosedRequest:
+      description: |
+        The caller disconnected before the response was written. Nothing failed
+        server-side and there is no body — documented because it appears in
+        proxy logs and metrics, not because a client can observe it.
+
+    500InternalServerError:
+      description: |
+        An unexpected failure. The cause is never in the response — it is in the
+        server log under the same `request_id`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    503ServiceUnavailable:
+      description: |
+        A dependency this endpoint needs is temporarily unreachable. Nothing is
+        wrong with the request; retry.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    504GatewayTimeout:
+      description: |
+        The query exceeded the server-side timeout. Retryable — it points at the
+        datastore, not at the request.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
