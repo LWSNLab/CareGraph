@@ -7,6 +7,8 @@ import pandas as pd
 import pdfplumber
 import requests
 
+from pipelines.common.paths import RAW_DIR
+
 log = logging.getLogger(__name__)
 
 
@@ -23,12 +25,20 @@ class GKVParser:
         self.raw_df = pd.DataFrame()
         self.cleaned_df = pd.DataFrame()
 
-    def download_if_url(self, target_dir: Path = Path("data/raw")) -> Path:
-        """Downloads the PDF if a URL was provided and saves it under output_filename."""
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_path = target_dir / self.output_filename
+    def download_if_url(self, target_dir: Path = RAW_DIR) -> Path:
+        """Downloads the PDF if a URL was provided and saves it under output_filename.
 
+        Creates target_dir only when it is going to write there. It used to be
+        created unconditionally, which gave a purely local parse a filesystem side
+        effect: every run — including the test suite — left an empty directory
+        behind, and it needed write access to a path it never used. In the
+        ingestion container that surfaced as `PermissionError: Permission denied:
+        'data'` for a PDF that was sitting right there on a mount.
+        """
         if self.file_path_or_url.startswith("http"):
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_path = target_dir / self.output_filename
+
             response = requests.get(self.file_path_or_url, timeout=15)
             response.raise_for_status()
             with open(target_path, "wb") as f:

@@ -11,13 +11,13 @@ give it a real home instead.
 """
 
 from pipelines.common.dsn import DSNError, checked_dsn, dsn_from_env
-from pipelines.common.paths import DATA_DIR, PACKAGE_ROOT, PROCESSED_DIR, RAW_DIR
 from pipelines.common.normalize import (
     BUNDESLAENDER,
     HTTP_ONLY_HOSTS,
     normalize_website,
     parse_bundeslaender,
 )
+from pipelines.common.paths import DATA_DIR, PACKAGE_ROOT, PROCESSED_DIR, RAW_DIR
 from pipelines.common.trust import use_system_trust_store
 
 __all__ = [
