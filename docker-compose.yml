@@ -33,7 +33,10 @@ services:
     # reaches it over the `internal` network; this mapping is for running the
     # sync worker and the gateway outside compose.
     ports:
-      - "127.0.0.1:8108:8108"
+      # Loopback binding kept; only the host port moves. Overridable for the same
+      # reason as the others: a port already in use must not make the stack
+      # unstartable for someone who did not write this file.
+      - "127.0.0.1:${TYPESENSE_PORT:-8108}:8108"
     # This check never once passed before 2026-08-17: it called `curl`, and the
     # typesense image has no curl — nor wget, nc or python3. The container was
     # permanently "unhealthy" while /health answered {"ok":true} the whole time.
@@ -65,7 +68,9 @@ services:
     # local network. The API reaches it over the `internal` network either way;
     # the mapping exists only for running the Go gateway outside compose.
     ports:
-      - "127.0.0.1:6379:6379"
+      # 6379 is occupied on any machine that already runs a Redis, which is most
+      # of them. Loopback binding kept — see the note above.
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
