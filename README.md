@@ -32,10 +32,14 @@ docker-compose.yml       Dev stack: Postgres+PostGIS, Typesense, Redis
 ## Quick Start
 
 ```bash
+# .env is required, not optional: the binaries carry no default DSN, because a
+# compiled-in credential is one that eventually gets deployed.
 cp .env.example .env
 
 # 1) Start infrastructure (auto-applies db/migrations on first run)
 make up
+make db-roles-dev   # the migration creates the least-privilege roles; this
+                    # gives them the throwaway passwords .env expects
 
 # 2) Load data — the database is empty until you do
 make dataset-import FILE=dist/caregraph-providers-YYYY-MM-DD.tar.gz
@@ -55,6 +59,9 @@ curl localhost:8080/healthz
 
 # The contract this build implements — no key needed
 curl localhost:8080/openapi.yaml
+
+# Which dependencies this instance can reach
+curl localhost:8080/readyz
 
 curl -H "X-API-Key: cg_…" \
   'localhost:8080/v1/infrastructure/near?lat=52.52&lng=13.405&radius_km=5'
@@ -102,7 +109,8 @@ Pre-1.0, and honest about which parts are real:
 | `GET /openapi.yaml` | ✅ the contract, embedded in the binary and served unauthenticated |
 | API keys & rate limiting | ✅ Argon2id, Redis token bucket, per-tier quotas |
 | Ingestion | ✅ OSM providers, GKV insurer list, IK enrichment, Bundes-Klinik-Atlas hospitals |
-| `GET /healthz` | ⚠️ liveness only — a `200` does not mean the database is reachable |
+| `GET /healthz` | ✅ liveness — deliberately does not probe dependencies |
+| `GET /readyz` | ✅ readiness — Postgres, Redis and Typesense, with severity per dependency |
 | Deduplication, address backfill | ⏳ planned |
 
 See the [documentation repo](https://github.com/LWSNLab/CareGraph_Doc) for the

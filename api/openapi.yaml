@@ -198,9 +198,14 @@ paths:
     get:
       summary: Liveness probe
       description: |
-        Reports that the process is up. It does **not** probe PostgreSQL, Redis
-        or the search engine — a `200` here does not mean the API can serve
-        queries. Dependency checks are tracked as E4-S3.
+        Reports that the process is up, and nothing else. It does **not** probe
+        PostgreSQL, Redis or the search engine — use `/readyz` for that.
+
+        The separation is deliberate. A failing liveness probe makes an
+        orchestrator restart the container, so it must only fail for conditions
+        a restart can fix. If it checked the database, a database outage would
+        restart every replica in a loop and turn a recoverable dependency
+        failure into a total one.
 
         Served at the origin, not under `/v1`: a probe is not part of the
         versioned contract.
@@ -217,6 +222,52 @@ paths:
                 required: [status]
                 properties:
                   status: { type: string, enum: [ok] }
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      description: |
+        Whether this instance should receive traffic, and what state each
+        dependency is in.
+
+        Severity follows how the API actually degrades, not how important a
+        dependency sounds:
+
+        | Dependency | Down means | Verdict |
+        | :-- | :-- | :-- |
+        | `postgres` | Every endpoint fails | `503` — take the instance out of rotation |
+        | `redis` | Rate limits stop being enforced; requests still succeed | `200`, `degraded` |
+        | `search` | `/search` answers `503`; `/near` and the IK lookup are unaffected | `200`, `degraded` |
+
+        Removing an instance from the load balancer because Redis is down would
+        cost working capacity and fix nothing, which is why only Postgres is
+        treated as required.
+
+        The body reports each dependency's state but **never the underlying
+        error** — a driver error carries the DSN, and this endpoint needs no
+        credential. Causes go to the server log, as they do for a `500`.
+
+        Results are cached for one second. The endpoint is unauthenticated and
+        issues a query per dependency, so without that a flood of cheap requests
+        would become a flood of database round trips.
+      operationId: getReadiness
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: |
+            Ready to serve. `status` is `ok`, or `degraded` when an optional
+            dependency is unreachable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+        '503':
+          description: |
+            A required dependency is unreachable; this instance cannot serve.
+            The body has the same shape as the `200`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
 
   /openapi.yaml:
     get:
@@ -348,6 +399,42 @@ components:
             phone: "+49 906 123456"
             services: [grundpflege, behandlungspflege, palliative]
             zusatzbeitrag: 2.90
+
+    Readiness:
+      type: object
+      description: The state of this instance and of each dependency it uses.
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          description: |
+            `ok` — every dependency reachable. `degraded` — an optional one is
+            not, and the instance still serves. `unavailable` — a required one
+            is not; accompanied by `503`.
+          enum: [ok, degraded, unavailable]
+        checks:
+          type: object
+          description: One entry per registered dependency, keyed by its name.
+          additionalProperties: { $ref: '#/components/schemas/ReadinessCheck' }
+          example:
+            postgres: { status: ok, latency_ms: 1.204 }
+            redis: { status: unavailable, latency_ms: 2000.0 }
+            search: { status: ok, latency_ms: 3.11 }
+
+    ReadinessCheck:
+      type: object
+      required: [status, latency_ms]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+        latency_ms:
+          type: number
+          format: double
+          description: |
+            How long the probe took. On failure this is how long it took to
+            fail, which is capped at the 2 s probe timeout.
+          example: 1.204
 
     InfrastructureListResponse:
       type: object

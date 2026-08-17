@@ -41,11 +41,6 @@ func (h *Handler) WithLogger(l *slog.Logger) *Handler {
 	return &c
 }
 
-// Health is the liveness/readiness probe (GET /healthz).
-func (h *Handler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-
 // Near handles GET /v1/infrastructure/near — spatial radius search.
 func (h *Handler) Near(c *gin.Context) {
 	params, err := ParseNearParams(c.Request.URL.Query())

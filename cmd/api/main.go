@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/LWSNLab/caregraph/internal/auth"
+	"github.com/LWSNLab/caregraph/internal/health"
 	"github.com/LWSNLab/caregraph/internal/httpapi"
 	"github.com/LWSNLab/caregraph/internal/infrastructure"
 	"github.com/LWSNLab/caregraph/internal/provider"
@@ -35,7 +36,10 @@ const (
 )
 
 func main() {
-	cfg := infrastructure.LoadConfig()
+	cfg, err := infrastructure.LoadConfig()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
 
 	// JSON to stderr: handlers log the cause of every 5xx here, and structured
 	// output is what a log aggregator can filter on. The `service` field is set
@@ -75,8 +79,17 @@ func main() {
 		slog.Warn("search engine unreachable — /search will answer 503", "error", err)
 	}
 
+	// Severity per dependency mirrors how the API actually degrades: without
+	// Postgres nothing works, without Redis quotas stop being enforced, without
+	// Typesense only /search is affected. See internal/health.
+	checker := health.New(slog.Default()).
+		Register("postgres", health.Required, pool.Ping).
+		Register("redis", health.Optional, limiter.Ping).
+		Register("search", health.Optional, searchClient.Ping)
+
 	r, err := httpapi.NewRouter(httpapi.Deps{
 		Provider: handler,
+		Health:   checker,
 		Keys:     keys,
 		Limiter:  limiter,
 		Log:      slog.Default(),

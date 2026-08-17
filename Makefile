@@ -39,8 +39,28 @@ test-db: ## Run the Python suite including database integration tests
 tidy: ## Resolve Go dependencies (creates go.sum)
 	go mod tidy
 
-api: ## Run the Go API locally
-	go run ./cmd/api
+# The Go binaries no longer carry a compiled-in DSN, so these targets take the
+# configuration from .env.
+#
+# Only variables that are not already set are taken from the file. The obvious
+# `set -a; . ./.env` would do the opposite and let the file overwrite what the
+# caller passed, so `CAREGRAPH_HTTP_ADDR=:9000 make api` would silently ignore
+# the port and start on the one in .env. The real environment wins; the file
+# supplies defaults.
+define with_env
+@test -f .env || { \
+	echo "no .env — run: cp .env.example .env && make up && make db-roles-dev"; \
+	exit 1; \
+}
+@while IFS='=' read -r key value; do \
+	case "$$key" in ''|\#*) continue ;; esac; \
+	printenv "$$key" >/dev/null || export "$$key=$$value"; \
+done < .env; \
+$(1)
+endef
+
+api: ## Run the Go API locally (configuration from .env)
+	$(call with_env, go run ./cmd/api)
 
 fmt: ## Format Go code
 	go fmt ./...
@@ -49,10 +69,10 @@ pipelines: ## Sync Python pipeline dependencies
 	cd pipelines && uv sync
 
 apikey-dev: ## Issue a local API key for development (prints it once)
-	go run ./cmd/apikey issue --name "Local Dev" --tier community
+	$(call with_env, go run ./cmd/apikey issue --name "Local Dev" --tier community)
 
 apikeys: ## List API keys
-	go run ./cmd/apikey list
+	$(call with_env, go run ./cmd/apikey list)
 
 dataset-export: ## Export the provider dataset as a redistributable archive
 	uv run --project pipelines python -m pipelines.run_dataset export

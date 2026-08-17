@@ -15,6 +15,7 @@ import (
 
 	"github.com/LWSNLab/caregraph/api"
 	"github.com/LWSNLab/caregraph/internal/auth"
+	"github.com/LWSNLab/caregraph/internal/health"
 	"github.com/LWSNLab/caregraph/internal/httpx"
 	"github.com/LWSNLab/caregraph/internal/provider"
 	"github.com/LWSNLab/caregraph/internal/ratelimit"
@@ -29,6 +30,7 @@ const DefaultRequestTimeout = 15 * time.Second
 // Deps are the collaborators the routes need.
 type Deps struct {
 	Provider *provider.Handler
+	Health   *health.Checker
 	Keys     auth.KeyStore
 	Limiter  *ratelimit.Limiter
 	Log      *slog.Logger
@@ -71,7 +73,7 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 	r.Use(
 		httpx.RequestID(),
 		httpx.Recovery(log),
-		gin.Logger(),
+		httpx.AccessLog(log),
 		httpx.Timeout(timeout),
 		auth.SecurityHeaders(),
 	)
@@ -80,10 +82,11 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 	r.NoRoute(httpx.NoRoute())
 	r.NoMethod(httpx.NoMethod())
 
-	// Unauthenticated. A liveness probe that needs a credential is one more thing
-	// to get wrong in an orchestrator, and a contract you need a key to read
-	// cannot be used to decide whether to ask for a key.
-	r.GET("/healthz", d.Provider.Health)
+	// Unauthenticated. A probe that needs a credential is one more thing to get
+	// wrong in an orchestrator, and a contract you need a key to read cannot be
+	// used to decide whether to ask for a key.
+	r.GET("/healthz", d.Health.Live)
+	r.GET("/readyz", d.Health.Ready)
 	r.GET("/openapi.yaml", ServeSpec)
 
 	// Authenticated API surface (v1).

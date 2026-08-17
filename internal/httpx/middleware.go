@@ -23,6 +23,59 @@ func Logger(base *slog.Logger, c *gin.Context) *slog.Logger {
 	return base
 }
 
+// AccessLog writes one structured record per request.
+//
+// Replaces gin.Logger(), which writes a plain-text line to its own writer. The
+// rest of the service logs JSON through slog, and two formats in one stream
+// defeat the point of structured logging: an aggregator either drops the
+// odd-shaped lines or stores them as unsearchable text. The access log is also
+// the highest-volume producer, so it is the worst one to leave unparseable.
+//
+// The level carries the meaning, so a filter alone separates the interesting
+// records: client mistakes are warnings, server failures are errors, and a
+// caller that hung up is neither.
+func AccessLog(log *slog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		started := time.Now()
+
+		// Captured before c.Next(): a handler may rewrite the query, and the
+		// record should describe what was asked for.
+		path, query := c.Request.URL.Path, c.Request.URL.RawQuery
+
+		c.Next()
+
+		status := c.Writer.Status()
+		attrs := []any{
+			"method", c.Request.Method,
+			"path", path,
+			"status", status,
+			"duration_ms", float64(time.Since(started).Microseconds()) / 1000,
+			"bytes", c.Writer.Size(),
+			"client_ip", c.ClientIP(),
+		}
+		if query != "" {
+			attrs = append(attrs, "query", query)
+		}
+
+		ctx := c.Request.Context()
+		entry := Logger(log, c)
+
+		switch {
+		// The caller went away. Nothing failed here and nobody is waiting for an
+		// answer, so this must not be logged as a server error — it would put a
+		// flaky client's disconnects into the same bucket as real 5xx.
+		case status == StatusClientClosedRequest:
+			entry.DebugContext(ctx, "client closed request", attrs...)
+		case status >= http.StatusInternalServerError:
+			entry.ErrorContext(ctx, "request failed", attrs...)
+		case status >= http.StatusBadRequest:
+			entry.WarnContext(ctx, "request rejected", attrs...)
+		default:
+			entry.InfoContext(ctx, "request", attrs...)
+		}
+	}
+}
+
 // Recovery turns a panic into a logged incident and a response in the standard
 // error shape. gin.Recovery() writes an empty 500 body, which means a panic is
 // the one failure a client cannot parse like any other.

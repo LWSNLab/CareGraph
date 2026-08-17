@@ -14,6 +14,7 @@ import (
 
 	"github.com/LWSNLab/caregraph/api"
 	"github.com/LWSNLab/caregraph/internal/auth"
+	"github.com/LWSNLab/caregraph/internal/health"
 	"github.com/LWSNLab/caregraph/internal/httpapi"
 	"github.com/LWSNLab/caregraph/internal/provider"
 	"github.com/LWSNLab/caregraph/internal/ratelimit"
@@ -155,11 +156,16 @@ func testRouter(t *testing.T, opts ...func(*httpapi.Deps)) *gin.Engine {
 		WithSearch(stubSearch{result: &search.Result{}}).
 		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	deps := httpapi.Deps{
 		Provider: handler,
-		Keys:     stubKeys{},
-		Limiter:  ratelimit.New(deadRedis{}),
-		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Health: health.New(quiet).
+			Register("postgres", health.Required, func(context.Context) error { return nil }).
+			Register("redis", health.Optional, func(context.Context) error { return nil }).
+			Register("search", health.Optional, func(context.Context) error { return nil }),
+		Keys:    stubKeys{},
+		Limiter: ratelimit.New(deadRedis{}),
+		Log:     quiet,
 	}
 	for _, opt := range opts {
 		opt(&deps)
@@ -170,6 +176,24 @@ func testRouter(t *testing.T, opts ...func(*httpapi.Deps)) *gin.Engine {
 		t.Fatalf("build router: %v", err)
 	}
 	return r
+}
+
+var errProbe = errors.New("dependency unreachable")
+
+// withProbes rebuilds the checker with the same three dependencies, failing the
+// named ones. Keeping the set identical is the point: the difference between
+// cases is severity, not which probes exist.
+func withProbes(failing map[string]error) func(*httpapi.Deps) {
+	return func(d *httpapi.Deps) {
+		quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+		probe := func(name string) health.Probe {
+			return func(context.Context) error { return failing[name] }
+		}
+		d.Health = health.New(quiet).
+			Register("postgres", health.Required, probe("postgres")).
+			Register("redis", health.Optional, probe("redis")).
+			Register("search", health.Optional, probe("search"))
+	}
 }
 
 func withRepo(repo provider.Repository) func(*httpapi.Deps) {
@@ -211,6 +235,24 @@ func TestResponsesValidateAgainstSpec(t *testing.T) {
 		{
 			name:   "healthz needs no key",
 			target: "/healthz", noKey: true, want: http.StatusOK,
+		},
+		{
+			name:   "readyz with every dependency up",
+			target: "/readyz", noKey: true, want: http.StatusOK,
+		},
+		{
+			// Redis is optional: quotas stop being enforced, requests still
+			// succeed. Pulling the instance out of rotation would remove working
+			// capacity to fix nothing.
+			name:   "readyz stays ready when an optional dependency is down",
+			target: "/readyz", noKey: true, want: http.StatusOK,
+			options: []func(*httpapi.Deps){withProbes(map[string]error{"redis": errProbe})},
+		},
+		{
+			// Postgres is required: every endpoint reads from it.
+			name:   "readyz reports unavailable when a required dependency is down",
+			target: "/readyz", noKey: true, want: http.StatusServiceUnavailable,
+			options: []func(*httpapi.Deps){withProbes(map[string]error{"postgres": errProbe})},
 		},
 		{
 			name:   "near returns a fully populated record",
