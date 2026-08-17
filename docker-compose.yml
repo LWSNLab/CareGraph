@@ -34,8 +34,22 @@ services:
     # sync worker and the gateway outside compose.
     ports:
       - "127.0.0.1:8108:8108"
+    # This check never once passed before 2026-08-17: it called `curl`, and the
+    # typesense image has no curl — nor wget, nc or python3. The container was
+    # permanently "unhealthy" while /health answered {"ok":true} the whole time.
+    # Nothing broke, because `api` only waited for service_started — which is
+    # precisely why it went unnoticed for so long. It waits for healthy now.
+    #
+    # bash is the only thing in the image that can speak to a socket, so the
+    # probe uses its /dev/tcp and greps the response body. Checking only that the
+    # port accepts would report healthy while Typesense was still loading its
+    # index from disk.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8108/health"]
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/8108 && printf "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q ''"ok":true'' <&3'
       interval: 5s
       timeout: 5s
       retries: 20
@@ -70,15 +84,66 @@ services:
       TYPESENSE_URL: http://typesense:8108
       TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-devkey}
       REDIS_ADDR: redis:6379
+      # The API refuses an unencrypted connection to a host that is not local,
+      # and `db` is not local as far as the process can tell — from inside a
+      # container there is no way to distinguish this private bridge network
+      # from the open internet. This says "the operator knows it is one host".
+      # A deployment across machines must drop this and use sslmode=require.
+      CAREGRAPH_ALLOW_INSECURE_DB: "1"
     ports:
-      - "8080:8080"
+      # Overridable like POSTGRES_PORT: 8080 is a busy port on a developer
+      # machine, and a self-hoster should not have to edit this file.
+      - "${CAREGRAPH_PORT:-8080}:8080"
+    # No healthcheck here on purpose: the image declares its own HEALTHCHECK
+    # (the binary probes its /readyz, since distroless has no shell to call
+    # curl from). Repeating it here would be a second definition to keep in step.
+    #
+    # Above the API's own 20 s shutdown timeout, otherwise Docker sends SIGKILL
+    # while requests are still draining and the graceful stop is pointless.
+    stop_grace_period: 30s
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
       typesense:
-        condition: service_started
+        # Now that the check actually works, wait for healthy rather than
+        # started: /search answers 503 until the index is loaded, and a
+        # container that is up is not the same as one that can answer.
+        condition: service_healthy
+    networks: [internal]
+
+  # Ingestion pipelines. A batch job, not a service: it runs to completion and
+  # exits, so it sits behind its own profile and is invoked with `run`, never
+  # `up`. See the Makefile targets, or directly:
+  #
+  #   docker compose --profile ingest run --rm ingest -m pipelines.run_dataset export
+  #
+  ingest:
+    profiles: ["ingest"]
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    environment:
+      # The write-scoped role, not the API's read-only one — a load fails on the
+      # first INSERT otherwise. Falls back to the owner because `caregraph_ingest`
+      # has no password until `make db-roles-dev` has run against the container.
+      INGEST_DATABASE_URL: postgres://${POSTGRES_USER:-caregraph}:${POSTGRES_PASSWORD:-caregraph}@db:5432/${POSTGRES_DB:-caregraph}?sslmode=disable
+      TYPESENSE_URL: http://typesense:8108
+      TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-devkey}
+      # Same reason as the api service above.
+      CAREGRAPH_ALLOW_INSECURE_DB: "1"
+    volumes:
+      # Inputs and outputs live on the host: the raw sources are hundreds of
+      # megabytes and are deliberately not in the image, and a dataset archive
+      # is the artefact a release publishes.
+      - ./pipelines/data:/app/pipelines/data
+      - ./dist:/app/dist
+    depends_on:
+      db:
+        condition: service_healthy
+      typesense:
+        condition: service_healthy
     networks: [internal]
 
 volumes:

@@ -7,8 +7,6 @@ dependencies = [
     "pandas>=3.0.5",
     "pdfplumber>=0.11.10",
     "beautifulsoup4>=4.15.0",
-    "playwright>=1.62.0",
-    "polars>=1.43.2",
     "requests>=2.34.2",
     "psycopg[binary]>=3.3.4",
     # Lets requests verify against the OS trust store instead of certifi's

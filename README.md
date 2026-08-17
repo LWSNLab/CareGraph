@@ -88,12 +88,32 @@ It is a **snapshot** and ages from the moment it was cut; the archive's
 
 To produce one from your own database: `make dataset-export`.
 
-The full container stack including the API:
+### Everything in containers
+
+No Go and no `uv` needed — the API and the ingestion pipelines both have images:
 
 ```bash
-make tidy
-docker compose --profile app up --build
+make tidy      # once, to produce go.sum
+make stack     # db, redis, typesense and the API, built and started
+
+# Ingestion runs as a batch job in its own image
+make ingest-dataset ARGS="export --out /app/dist/providers.tar.gz"
+make ingest-load    ARGS="providers --input pipelines/data/raw/providers.json"
+make ingest-search  ARGS="sync"
 ```
+
+`make stack` publishes the API on `:8080`; set `CAREGRAPH_PORT` if that port is
+taken. The API container reports its own health — the binary probes its
+`/readyz`, since the image is distroless and has no shell for curl — so
+`docker compose ps` tells you whether it can actually serve, not just whether
+the process started.
+
+**A remote database must use TLS.** Both the API and the pipelines refuse
+`sslmode=disable` — and an *unset* `sslmode`, which libpq treats as `prefer` and
+silently downgrades — against anything that is not loopback. Use
+`sslmode=require`. The compose services set `CAREGRAPH_ALLOW_INSECURE_DB=1`
+because they talk to `db` over a private network on one host; a deployment
+spanning machines must not.
 
 ---
 

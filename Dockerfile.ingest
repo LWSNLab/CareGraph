@@ -1,0 +1,104 @@
+# Ingestion pipelines (Python). Scheduled jobs, not a long-running service:
+# `docker compose run --rm ingest <args>` rather than a container that stays up.
+#
+# ## Why Debian slim and not Alpine
+#
+# The pipelines verify TLS against the **operating system trust store** rather
+# than certifi's bundle (pipelines/common/trust.py), so the image has to have
+# one. Debian slim ships `ca-certificates`; **Alpine does not install it by
+# default**, and an empty store would fail every outbound TLS call.
+#
+# The code degrades loudly rather than silently — `use_system_trust_store()`
+# counts the CAs first and keeps certifi with a warning when the store is empty —
+# so the wrong base image costs the tolerance for TLS-inspecting proxies, not the
+# whole run. That is the kind of fault which gets diagnosed as "the source is
+# down": on 2026-08-10 a Zscaler appliance re-signing gkv-datenaustausch.de took
+# IK coverage from 92/93 to 76/93 for exactly this reason.
+#
+# The trust store is asserted at build time below, so a base-image change that
+# drops it fails here rather than in a quarterly ingestion run.
+
+FROM python:3.12-slim-bookworm AS build
+
+# uv resolves and installs from the lockfile. Copied from the official image
+# rather than curl-installed so the version is pinned by digest, not by whatever
+# the installer script fetches today.
+COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+WORKDIR /app
+
+# Dependencies before source: this layer is rebuilt only when the lockfile
+# changes, not on every edit to a parser.
+COPY pipelines/pyproject.toml pipelines/uv.lock ./pipelines/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    cd pipelines && uv sync --locked --no-dev --no-install-project
+
+COPY pipelines/ ./pipelines/
+
+# Not for executing: `dataset export` reads the newest filename here to stamp
+# MANIFEST.json, and `dataset import` compares that stamp against it. See
+# Dockerfile.ingest.dockerignore for what went wrong when this was missing.
+COPY db/migrations/ ./db/migrations/
+
+# --- runtime ----------------------------------------------------------------
+
+FROM python:3.12-slim-bookworm
+
+# ca-certificates is the reason this image is Debian-based; see the header.
+# Nothing else is added: psycopg is installed as psycopg[binary], which carries
+# its own libpq, so there is no system Postgres client to pull in.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fail the build, not a production run, if the base image ever stops carrying a
+# populated trust store. This is the assertion the comment at the top is about.
+RUN set -eu; \
+    count=$(find /etc/ssl/certs -name '*.pem' | wc -l); \
+    bundle=$(grep -c 'BEGIN CERTIFICATE' /etc/ssl/certs/ca-certificates.crt || echo 0); \
+    echo "OS trust store: ${count} pem files, ${bundle} certificates in the bundle"; \
+    if [ "$bundle" -lt 100 ]; then \
+        echo "ERROR: the OS trust store is empty or tiny — pipelines/common/trust.py" >&2; \
+        echo "       would fall back to certifi and lose proxy tolerance." >&2; \
+        exit 1; \
+    fi
+
+# The user is created *before* the copy so ownership can be set by COPY itself.
+# A `chown -R` afterwards rewrites the metadata of every file, and a Docker layer
+# stores the whole of each changed file — so it silently duplicated the entire
+# 227 MB tree into a second layer. The image was 604 MB; without that it is the
+# base plus one copy.
+RUN useradd --system --create-home --uid 10001 ingest
+
+# /app has to belong to ingest as a *directory*, not just its contents: several
+# runners write to paths relative to the working directory — GKVParser creates
+# `data/raw` before deciding whether it needs to download anything — and WORKDIR
+# would otherwise create /app as root and leave those writes failing with EACCES.
+# One directory, so unlike `chown -R` this costs a few bytes rather than a
+# duplicate of the whole tree.
+RUN install -d -o ingest -g ingest /app
+
+WORKDIR /app
+COPY --from=build --chown=ingest:ingest /app /app
+
+# The venv uv created, so `python` is the project interpreter with the
+# dependencies on its path.
+ENV PATH="/app/pipelines/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Unprivileged: nothing here needs root, and the ingestion code parses input
+# from the open internet — PDFs, XML and Overpass responses.
+#
+# PYTHONDONTWRITEBYTECODE keeps the interpreter from writing next to the source.
+USER ingest
+
+# No ENTRYPOINT beyond the interpreter: the runners are separate commands
+# (run_load, run_dataset, run_search), selected per invocation.
+#   docker compose run --rm ingest -m pipelines.run_dataset export
+ENTRYPOINT ["python"]
+CMD ["-c", "import sys; print('specify a runner, e.g. -m pipelines.run_load providers'); sys.exit(2)"]

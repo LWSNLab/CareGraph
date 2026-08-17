@@ -19,17 +19,21 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from datetime import date
 from pathlib import Path
 
-from pipelines.common import parse_bundeslaender, use_system_trust_store
+from pipelines.common import (
+    DSNError,
+    checked_dsn,
+    dsn_from_env,
+    parse_bundeslaender,
+    use_system_trust_store,
+)
 from pipelines.load.postgres_loader import PostgresLoader
 
 log = logging.getLogger("pipelines.run_load")
 
-DEFAULT_DSN = "postgres://caregraph_ingest:devingest@localhost:5433/caregraph?sslmode=disable"
 
 
 def load_hospitals(loader: PostgresLoader, path: Path):
@@ -171,7 +175,7 @@ def main() -> int:
     # and loading with it would fail on the first write.
     ap.add_argument(
         "--dsn",
-        default=os.environ.get("INGEST_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_DSN,
+        default=dsn_from_env(),
         help="Postgres DSN (defaults to $INGEST_DATABASE_URL)",
     )
     ap.add_argument("--verbose", action="store_true")
@@ -183,7 +187,15 @@ def main() -> int:
     # IK sources are otherwise unreachable and coverage silently drops.
     use_system_trust_store()
 
-    loader = PostgresLoader(args.dsn)
+    # Vet the DSN before anything connects: a missing variable or a plaintext
+    # connection to a remote host should stop here, not halfway through a load.
+    try:
+        dsn = checked_dsn(args.dsn)
+    except DSNError as exc:
+        log.error("%s", exc)
+        return 1
+
+    loader = PostgresLoader(dsn)
     try:
         if args.what == "providers":
             report = load_providers(loader, args.input)

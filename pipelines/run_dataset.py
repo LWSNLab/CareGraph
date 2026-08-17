@@ -12,17 +12,15 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pipelines.common import use_system_trust_store
+from pipelines.common import DSNError, checked_dsn, dsn_from_env, use_system_trust_store
 from pipelines.dataset import export_dataset, import_dataset
 
 log = logging.getLogger("pipelines.run_dataset")
 
-DEFAULT_DSN = "postgres://caregraph_ingest:devingest@localhost:5433/caregraph?sslmode=disable"
 
 
 def main() -> int:
@@ -36,7 +34,7 @@ def main() -> int:
                     help="import an archive cut against a different migration")
     ap.add_argument(
         "--dsn",
-        default=os.environ.get("INGEST_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_DSN,
+        default=dsn_from_env(),
         help="Postgres DSN (defaults to $INGEST_DATABASE_URL)",
     )
     ap.add_argument("--verbose", action="store_true")
@@ -46,17 +44,25 @@ def main() -> int:
                         format="%(levelname)-7s %(message)s")
     use_system_trust_store()
 
+    # Vet the DSN before anything connects: a missing variable or a plaintext
+    # connection to a remote host should stop here, not halfway through a load.
+    try:
+        dsn = checked_dsn(args.dsn)
+    except DSNError as exc:
+        log.error("%s", exc)
+        return 1
+
     try:
         if args.what == "export":
             out = args.out or Path(
                 f"dist/caregraph-providers-{datetime.now(UTC):%Y-%m-%d}.tar.gz")
-            result = export_dataset(args.dsn, out, args.migrations)
+            result = export_dataset(dsn, out, args.migrations)
             print(f"✅ {result.summary()}")
             print(f"   {result.path}")
         else:
             if not args.file:
                 ap.error("import needs --file")
-            result = import_dataset(args.dsn, args.file, args.migrations,
+            result = import_dataset(dsn, args.file, args.migrations,
                                     args.allow_schema_mismatch)
             print(f"✅ {result.summary()}")
             print(f"   {result.manifest['attribution']}")

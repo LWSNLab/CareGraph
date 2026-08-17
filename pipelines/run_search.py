@@ -16,12 +16,11 @@ import logging
 import os
 import sys
 
-from pipelines.common import use_system_trust_store
+from pipelines.common import DSNError, checked_dsn, dsn_from_env, use_system_trust_store
 from pipelines.search import sync_index
 
 log = logging.getLogger("pipelines.run_search")
 
-DEFAULT_DSN = "postgres://caregraph_ingest:devingest@localhost:5433/caregraph?sslmode=disable"
 
 
 def main() -> int:
@@ -34,7 +33,7 @@ def main() -> int:
                     help="superseded collections to retain for a manual rollback")
     ap.add_argument(
         "--dsn",
-        default=os.environ.get("INGEST_DATABASE_URL") or os.environ.get("DATABASE_URL") or DEFAULT_DSN,
+        default=dsn_from_env(),
     )
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
@@ -43,8 +42,16 @@ def main() -> int:
                         format="%(levelname)-7s %(message)s")
     use_system_trust_store()
 
+    # Vet the DSN before anything connects: a missing variable or a plaintext
+    # connection to a remote host should stop here, not halfway through a load.
     try:
-        report = sync_index(args.dsn, args.url, args.api_key, args.keep)
+        dsn = checked_dsn(args.dsn)
+    except DSNError as exc:
+        log.error("%s", exc)
+        return 1
+
+    try:
+        report = sync_index(dsn, args.url, args.api_key, args.keep)
     except Exception:
         log.exception("search index rebuild failed")
         return 1

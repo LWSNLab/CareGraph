@@ -138,8 +138,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "pipelines/pyproject.toml"
 
+      # --locked, not a bare sync: it fails when uv.lock does not match
+      # pyproject.toml, so a dependency change without a lockfile update is
+      # caught here rather than in an image build that installs from the lock.
       - name: Install dependencies
-        run: uv sync --all-groups
+        run: uv sync --all-groups --locked
 
       - name: Lint
         run: uv run ruff check .

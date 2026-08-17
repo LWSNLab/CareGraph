@@ -1,13 +1,26 @@
-.PHONY: help up down logs ps migrate tidy api fmt pipelines
+.PHONY: help up down stack images logs ps migrate tidy api fmt pipelines
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_%-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 up: ## Start infra (db, typesense, redis)
 	docker compose up -d db typesense redis
 
 down: ## Stop and remove containers
 	docker compose down
+
+stack: ## Start the whole stack in containers, API included (CAREGRAPH_PORT=... to move it)
+	docker compose --profile app up -d --build
+
+images: ## Build both images without starting anything
+	docker compose --profile app --profile ingest build
+
+# Containerised ingestion. The same runners as the host targets above, in the
+# image a deployment uses — which is the point: a self-hoster with neither Go
+# nor uv installed can still load data and cut a dataset.
+ingest-%: ## Run a pipeline in the ingest container, e.g. make ingest-dataset ARGS="export"
+	@test -n "$(ARGS)" || (echo 'usage: make ingest-dataset ARGS="export --out /app/dist/x.tar.gz"' && exit 1)
+	docker compose --profile ingest run --rm ingest -m pipelines.run_$* $(ARGS)
 
 logs: ## Tail container logs
 	docker compose logs -f

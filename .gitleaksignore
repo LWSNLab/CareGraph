@@ -15,6 +15,12 @@
 # working tree is clean and no new commit reproduces this. Only the historical
 # commit still holds the old text, and this entry covers exactly that commit.
 #
-# Once this branch is squash-merged, develop's history contains only the
-# rewritten version and this file can be deleted.
+# When this entry can go — and it is not "after the merge", as an earlier
+# version of this comment claimed. PR #56 was squash-merged, so the commit is no
+# longer an ancestor of develop, and the scan still finds it: `gitleaks git`
+# walks every ref, and `feature/e3-s5-openapi-docs` still exists on origin.
+#
+# Verified by cloning: with all branches present the finding returns, with
+# `--single-branch --branch develop` it does not. So the entry stays until that
+# merged branch is deleted on origin, and can be dropped in the same change.
 9695e7df875f789cc5a5a1227fe923ef9607438a:api/contract_test.go:generic-api-key:29

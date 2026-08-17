@@ -1,0 +1,44 @@
+# Build context for the ingestion image.
+#
+# BuildKit prefers `<dockerfile>.dockerignore` over the shared `.dockerignore`,
+# which is why this file exists: the shared one excludes `pipelines/` to keep it
+# out of the Go API image, and that is exactly what this image is built from.
+#
+# Without this file the ingest build would receive no source at all — and it
+# would fail at COPY rather than produce a broken image, but only after pulling
+# and installing everything first.
+.git
+.idea
+.env
+
+# Never let a local virtualenv or cache into the image: uv installs from the
+# lockfile, and copied-in bytecode from another platform would shadow it.
+**/__pycache__
+**/.venv
+**/.ruff_cache
+**/.pytest_cache
+
+# Not needed at runtime. The tests run in CI against the source tree, not in
+# this image.
+pipelines/tests
+docs
+*.md
+
+# Go sources, the compiled dataset archives and the raw downloads. The raw
+# directory in particular holds hundreds of megabytes of PDFs and XML that a
+# pipeline re-fetches when it needs them.
+cmd
+internal
+api
+dist
+pipelines/data
+
+# db/ is deliberately absent from the list above, even though nothing in this
+# image executes SQL. `dataset export` stamps the newest migration filename into
+# MANIFEST.json, and `dataset import` refuses an archive whose stamp does not
+# match the schema in front of it.
+#
+# Excluding it made latest_migration() fall back to "unknown", so an archive cut
+# inside the container was rejected on import anywhere else — a schema mismatch
+# reported against a perfectly good archive, on the self-hosting path this
+# release exists for. 28 KB of SQL is a cheap fix.
