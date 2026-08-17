@@ -39,6 +39,13 @@ func LoadConfig() (Config, error) {
 		return Config{}, ErrNoDatabaseURL
 	}
 
+	// Before the pool is opened, so a misconfigured deployment fails at startup
+	// rather than sending credentials over a network in the clear.
+	allowInsecure := strings.TrimSpace(os.Getenv(AllowInsecureDBEnv)) != ""
+	if err := checkDSNTransport(dsn, allowInsecure); err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		HTTPAddr:     env("CAREGRAPH_HTTP_ADDR", ":8080"),
 		DatabaseURL:  dsn,

@@ -33,9 +33,17 @@ services:
     # reaches it over the `internal` network; this mapping is for running the
     # sync worker and the gateway outside compose.
     ports:
-      - "127.0.0.1:8108:8108"
+      - "127.0.0.1:${TYPESENSE_PORT:-8108}:8108"
+    # bash is the only thing in this image that can reach a socket — no curl,
+    # wget, nc or python3 — hence /dev/tcp. Greps the body rather than just
+    # checking that the port accepts, which would report healthy while Typesense
+    # was still loading its index.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8108/health"]
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/8108 && printf "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q ''"ok":true'' <&3'
       interval: 5s
       timeout: 5s
       retries: 20
@@ -51,7 +59,7 @@ services:
     # local network. The API reaches it over the `internal` network either way;
     # the mapping exists only for running the Go gateway outside compose.
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -70,15 +78,48 @@ services:
       TYPESENSE_URL: http://typesense:8108
       TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-devkey}
       REDIS_ADDR: redis:6379
+      # `db` is not loopback, and from inside a container a private bridge
+      # network is indistinguishable from the open internet. This asserts "one
+      # host". A deployment spanning machines must drop it and use sslmode=require.
+      CAREGRAPH_ALLOW_INSECURE_DB: "1"
     ports:
-      - "8080:8080"
+      - "${CAREGRAPH_PORT:-8080}:8080"
+    # No healthcheck here: the image declares its own, so there is one definition.
+    # stop_grace_period exceeds the API's 20 s drain, or SIGKILL would cut it off.
+    stop_grace_period: 30s
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
       typesense:
-        condition: service_started
+        # healthy, not started: /search answers 503 until the index is loaded.
+        condition: service_healthy
+    networks: [internal]
+
+  # Ingestion pipelines — a batch job, so invoked with `run`, never `up`:
+  #   docker compose --profile ingest run --rm ingest -m pipelines.run_dataset export
+  ingest:
+    profiles: ["ingest"]
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    environment:
+      # Owner rather than the write-scoped role: `caregraph_ingest` has no
+      # password until `make db-roles-dev` runs, which compose cannot depend on.
+      INGEST_DATABASE_URL: postgres://${POSTGRES_USER:-caregraph}:${POSTGRES_PASSWORD:-caregraph}@db:5432/${POSTGRES_DB:-caregraph}?sslmode=disable
+      TYPESENSE_URL: http://typesense:8108
+      TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-devkey}
+      CAREGRAPH_ALLOW_INSECURE_DB: "1"  # see the api service above
+    volumes:
+      # Inputs and outputs stay on the host; neither belongs in the image.
+      - ./pipelines/data:/app/pipelines/data
+      - ./dist:/app/dist
+    depends_on:
+      db:
+        condition: service_healthy
+      typesense:
+        condition: service_healthy
     networks: [internal]
 
 volumes:

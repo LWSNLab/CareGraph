@@ -1,13 +1,8 @@
-# CareGraph HTTP API — the canonical contract.
+# CareGraph HTTP API — the canonical contract, checked against the handlers by
+# api/spec_test.go so the two cannot drift.
 #
-# This file lives next to the code it describes, and `api/spec_test.go` fails
-# the build when the two disagree: routes, error codes, provider types and the
-# actual JSON the handlers emit are all checked against it. A copy in another
-# repository could only be kept in sync by hand, which is how specs rot.
-#
-# Declared 3.0.3, not 3.1: the document uses `nullable`, which 3.1 removed. A
-# 3.1 header over 3.0 keywords is worse than either — generators drop what they
-# do not recognise, silently.
+# 3.0.3 rather than 3.1: the document uses `nullable`, which 3.1 removed, and
+# generators silently drop what they do not recognise.
 openapi: 3.0.3
 
 info:
@@ -28,10 +23,9 @@ info:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html
 
-# The server is the origin, and `/v1` is part of each path. The alternative —
-# folding `/v1` into the server URL — cannot express `/healthz`, which is served
-# at the root; an earlier revision of this file did exactly that and told
-# generated clients to call `/v1/healthz`.
+# The origin, with `/v1` in each path. Folding `/v1` into the server URL cannot
+# express `/healthz`, which is served at the root — an earlier revision did, and
+# told generated clients to call `/v1/healthz`.
 servers:
   - url: https://api.caregraph.de
     description: Production
@@ -364,8 +358,8 @@ components:
           description: |
             Institutionskennzeichen. Present for statutory insurers; absent for
             care providers and hospitals, whose IKs no public source publishes.
-          # A real one — Techniker Krankenkasse. An invented IK in an example is
-          # the kind of thing that gets copied into a request and fails silently.
+          # A real one (Techniker Krankenkasse): an invented IK gets copied into a
+          # request and fails silently.
           example: "101576623"
         type: { $ref: '#/components/schemas/ProviderType' }
         name:

@@ -367,3 +367,34 @@ def test_real_list_has_no_merge_artefacts():
     names = set(df["name"])
     assert "SKD BKK" in names
     assert "Sozialversicherung für Landwirtschaft, Forsten und Gartenbau (SVLFG)" in names
+
+
+# --------------------------------------------------- download_if_url side effects
+
+
+def test_a_local_path_creates_no_download_directory(tmp_path):
+    """`download_if_url` used to mkdir unconditionally, before checking for a URL.
+
+    Every parse of a local PDF left an empty directory behind and needed write
+    permission on a path it never used — in the container, a PermissionError for a
+    PDF sitting on a mounted volume.
+    """
+    target = tmp_path / "raw"
+    parser = GKVParser("/some/local/gkv.pdf", output_filename="gkv.pdf")
+
+    assert parser.download_if_url(target_dir=target) == Path("/some/local/gkv.pdf")
+    assert not target.exists(), "a local parse created a download directory"
+
+
+def test_the_default_download_directory_is_package_relative():
+    """It must not depend on the working directory.
+
+    `Path("data/raw")` resolved against the caller's cwd: from the repository root
+    that is `<root>/data/raw`, while every real input lives in
+    `<root>/pipelines/data/raw`. In the container it pointed outside the bind mount.
+    """
+    from pipelines.common.paths import RAW_DIR
+
+    assert RAW_DIR.is_absolute()
+    assert RAW_DIR.parts[-3:] == ("pipelines", "data", "raw")
+    assert RAW_DIR == REAL_PDF.resolve().parent

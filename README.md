@@ -88,12 +88,37 @@ It is a **snapshot** and ages from the moment it was cut; the archive's
 
 To produce one from your own database: `make dataset-export`.
 
-The full container stack including the API:
+### Everything in containers
+
+No Go and no `uv` needed — the API and the ingestion pipelines both have images:
 
 ```bash
-make tidy
-docker compose --profile app up --build
+make tidy      # once, to produce go.sum
+make stack     # db, redis, typesense and the API, built and started
+
+# Ingestion runs as a batch job in its own image
+make ingest-dataset ARGS="export --out /app/dist/providers.tar.gz"
+make ingest-load    ARGS="providers --input pipelines/data/raw/providers.json"
+make ingest-search  ARGS="sync"
 ```
+
+`make stack` publishes the API on `:8080`. All published ports are overridable in
+`.env` — `CAREGRAPH_PORT`, `POSTGRES_PORT`, `TYPESENSE_PORT`, `REDIS_PORT` — which
+matters because `6379` is already taken on any machine running a Redis. If you
+move `POSTGRES_PORT`, change the port inside `DATABASE_URL` and
+`ADMIN_DATABASE_URL` to match; they are separate settings because a deployment
+may point at a database that compose does not manage.
+
+The API container reports its own health — the binary probes its `/readyz`, since
+the image is distroless and has no shell for curl — so `docker compose ps` tells
+you whether it can actually serve, not just whether the process started.
+
+**A remote database must use TLS.** Both the API and the pipelines refuse
+`sslmode=disable` — and an *unset* `sslmode`, which libpq treats as `prefer` and
+silently downgrades — against anything that is not loopback. Use
+`sslmode=require`. The compose services set `CAREGRAPH_ALLOW_INSECURE_DB=1`
+because they talk to `db` over a private network on one host; a deployment
+spanning machines must not.
 
 ---
 
@@ -104,7 +129,7 @@ Pre-1.0, and honest about which parts are real:
 | | |
 | :-- | :-- |
 | `GET /v1/infrastructure/near` | ✅ radius search over PostGIS, p95 ~10 ms |
-| `GET /v1/infrastructure/{ik_nummer}` | ✅ resolves the 92 insurers that have an IK |
+| `GET /v1/infrastructure/{ik_nummer}` | ✅ resolves the 92 insurers that have an IK — **once they are loaded**; the release archive is providers only, so this answers `404` until `make load-insurers` has run |
 | `GET /v1/infrastructure/search` | ✅ typo- and umlaut-tolerant via Typesense; `501` when no engine is configured |
 | `GET /openapi.yaml` | ✅ the contract, embedded in the binary and served unauthenticated |
 | API keys & rate limiting | ✅ Argon2id, Redis token bucket, per-tier quotas |

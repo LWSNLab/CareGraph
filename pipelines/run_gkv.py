@@ -18,6 +18,7 @@ import logging
 import sys
 
 from pipelines.common import use_system_trust_store
+from pipelines.common.paths import PROCESSED_DIR
 from pipelines.load.exporter import DataExporter
 from pipelines.parsers.gkv_parser import GKVParser
 from pipelines.scrapers.address_scraper import AddressScraper
@@ -30,7 +31,7 @@ def main() -> int:
     ap.add_argument("source", help="Path or URL to the GKV list PDF")
     ap.add_argument("--year", type=int, default=2026, help="Version year for output filenames")
     ap.add_argument("--no-scrape", action="store_true", help="Skip address scraping (fast)")
-    ap.add_argument("--out", default="data/processed", help="Output directory")
+    ap.add_argument("--out", default=str(PROCESSED_DIR), help="Output directory")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 

@@ -1,13 +1,26 @@
-.PHONY: help up down logs ps migrate tidy api fmt pipelines
+.PHONY: help up down stack images logs ps migrate tidy api fmt pipelines
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_%-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 up: ## Start infra (db, typesense, redis)
 	docker compose up -d db typesense redis
 
 down: ## Stop and remove containers
 	docker compose down
+
+stack: ## Start the whole stack in containers, API included (CAREGRAPH_PORT=... to move it)
+	docker compose --profile app up -d --build
+
+images: ## Build both images without starting anything
+	docker compose --profile app --profile ingest build
+
+# Containerised ingestion. The same runners as the host targets above, in the
+# image a deployment uses — which is the point: a self-hoster with neither Go
+# nor uv installed can still load data and cut a dataset.
+ingest-%: ## Run a pipeline in the ingest container, e.g. make ingest-dataset ARGS="export"
+	@test -n "$(ARGS)" || (echo 'usage: make ingest-dataset ARGS="export --out /app/dist/x.tar.gz"' && exit 1)
+	docker compose --profile ingest run --rm ingest -m pipelines.run_$* $(ARGS)
 
 logs: ## Tail container logs
 	docker compose logs -f
@@ -27,14 +40,13 @@ db-roles-dev: ## Set throwaway passwords for the least-privilege roles (LOCAL ON
 	@echo "dev passwords set — never use these outside a local container"
 
 load-providers: ## Load scraped providers into PostGIS
-	uv run --project pipelines python -m pipelines.run_load providers
+	$(call with_env, uv run --project pipelines python -m pipelines.run_load providers)
 
 load-insurers: ## Load the GKV insurer list into PostGIS
-	uv run --project pipelines python -m pipelines.run_load insurers
+	$(call with_env, uv run --project pipelines python -m pipelines.run_load insurers)
 
 test-db: ## Run the Python suite including database integration tests
-	CAREGRAPH_TEST_DSN=$${DATABASE_URL:-postgres://caregraph:caregraph@localhost:5433/caregraph?sslmode=disable} \
-		uv run --project pipelines pytest pipelines/tests -q
+	$(call with_env, CAREGRAPH_TEST_DSN=$$INGEST_DATABASE_URL uv run --project pipelines pytest pipelines/tests -q)
 
 tidy: ## Resolve Go dependencies (creates go.sum)
 	go mod tidy
@@ -75,14 +87,14 @@ apikeys: ## List API keys
 	$(call with_env, go run ./cmd/apikey list)
 
 dataset-export: ## Export the provider dataset as a redistributable archive
-	uv run --project pipelines python -m pipelines.run_dataset export
+	$(call with_env, uv run --project pipelines python -m pipelines.run_dataset export)
 
 dataset-import: ## Import a dataset archive (FILE=dist/....tar.gz)
 	@test -n "$(FILE)" || (echo "usage: make dataset-import FILE=dist/caregraph-providers-YYYY-MM-DD.tar.gz" && exit 1)
-	uv run --project pipelines python -m pipelines.run_dataset import --file "$(FILE)"
+	$(call with_env, uv run --project pipelines python -m pipelines.run_dataset import --file "$(FILE)")
 
 search-sync: ## Rebuild the Typesense search index from Postgres
-	uv run --project pipelines python -m pipelines.run_search sync
+	$(call with_env, uv run --project pipelines python -m pipelines.run_search sync)
 
 bootstrap: ## Fresh install: schema + dataset (FILE=...) or full ingestion
 	@echo "1/3  applying migrations"
@@ -102,4 +114,4 @@ bootstrap: ## Fresh install: schema + dataset (FILE=...) or full ingestion
 
 load-hospitals: ## Load the Bundes-Klinik-Atlas export (FILE=... , download it yourself)
 	@test -n "$(FILE)" || (echo "usage: make load-hospitals FILE=pipelines/data/raw/..._TVERZ_Export.xml" && echo "get it from https://bundes-klinik-atlas.de/open-data/" && exit 1)
-	uv run --project pipelines python -m pipelines.run_load hospitals --input "$(FILE)"
+	$(call with_env, uv run --project pipelines python -m pipelines.run_load hospitals --input "$(FILE)")

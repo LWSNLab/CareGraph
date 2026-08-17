@@ -1,0 +1,97 @@
+name: Images
+
+# Builds both container images so they cannot rot unnoticed. Pushing them to a
+# registry is deployment and belongs to E4-S2.
+#
+# Deliberately a separate workflow with a paths filter rather than a job in
+# ci.yml: the ingestion image is ~600 MB and takes minutes to build, and this
+# repository is private, so every run consumes billed Actions minutes. It runs
+# when something that goes *into* an image changes, not on every pull request.
+#
+# The trust-store assertion inside Dockerfile.ingest is the reason this matters
+# most: it turns "the base image stopped shipping ca-certificates" into a failed
+# build instead of a quarterly ingestion run that silently loses IK coverage.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.ingest"
+      - "Dockerfile.ingest.dockerignore"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - "pipelines/pyproject.toml"
+      - "pipelines/uv.lock"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/images.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.ingest"
+      - "Dockerfile.ingest.dockerignore"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - "pipelines/pyproject.toml"
+      - "pipelines/uv.lock"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/images.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build API and ingestion images
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the API image
+        run: docker build -t caregraph-api:ci .
+
+      # The image has no shell, so this also proves the -healthcheck flag works:
+      # with nothing listening it must exit non-zero. A healthcheck that always
+      # succeeded would mark a broken container healthy.
+      - name: The API healthcheck fails when nothing is listening
+        run: |
+          set -euo pipefail
+          if docker run --rm --entrypoint /api caregraph-api:ci -healthcheck; then
+            echo "::error::-healthcheck exited 0 with no server running"
+            exit 1
+          fi
+          echo "healthcheck correctly reported failure"
+
+      # Builds the trust-store assertion with it; see Dockerfile.ingest.
+      - name: Build the ingestion image
+        run: docker build -f Dockerfile.ingest -t caregraph-ingest:ci .
+
+      # Cheap guard against the mistake this story actually made: excluding
+      # db/migrations from the build context made `dataset export` stamp
+      # "unknown" into MANIFEST.json, which made every archive cut in the
+      # container unimportable anywhere else.
+      - name: The ingestion image can read the migrations
+        run: |
+          set -euo pipefail
+          latest=$(docker run --rm caregraph-ingest:ci -c \
+            "from pathlib import Path; \
+             from pipelines.dataset.export import latest_migration; \
+             print(latest_migration(Path('db/migrations')))")
+          echo "latest migration seen in the image: ${latest}"
+          if [ "$latest" = "unknown" ]; then
+            echo "::error::the image cannot see db/migrations — archives would be stamped 'unknown'"
+            exit 1
+          fi
+
+
+      - name: Report image sizes
+        run: docker images --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep caregraph

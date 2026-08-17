@@ -5,15 +5,23 @@
 // The route table itself lives in internal/httpapi, where it can be built
 // without dependencies and compared against the OpenAPI contract in a test.
 //
+// Run with -healthcheck it probes a running instance instead of starting one;
+// see runHealthcheck.
+//
 // See docs (LWSNLab/CareGraph_Doc): architecture/system-overview.md.
 package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/LWSNLab/caregraph/internal/auth"
@@ -35,10 +43,36 @@ const (
 	idleTimeout       = 60 * time.Second
 )
 
+// Above httpapi.DefaultRequestTimeout (15 s), which caps any single request, so
+// every in-flight request can finish. compose sets stop_grace_period above this,
+// or Docker would SIGKILL mid-drain.
+const shutdownTimeout = 20 * time.Second
+
+// Only stops the probe hanging if the socket accepts and then goes quiet; the
+// container healthcheck has its own timeout.
+const healthcheckTimeout = 3 * time.Second
+
 func main() {
+	probe := flag.Bool("healthcheck", false,
+		"probe a running instance's /readyz and exit 0 when it is ready")
+	flag.Parse()
+
+	if *probe {
+		os.Exit(runHealthcheck(os.Getenv("CAREGRAPH_HTTP_ADDR")))
+	}
+
+	// run rather than inlining: log.Fatal calls os.Exit, which skips defers, so a
+	// fatal path would leak the pool and the Redis client.
+	os.Exit(run())
+}
+
+func run() int {
 	cfg, err := infrastructure.LoadConfig()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		// Before the logger exists, and a startup misconfiguration rather than an
+		// operational event, so plain stderr.
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		return 1
 	}
 
 	// JSON to stderr: handlers log the cause of every 5xx here, and structured
@@ -51,7 +85,8 @@ func main() {
 
 	pool, err := infrastructure.NewPostgresPool(cfg)
 	if err != nil {
-		log.Fatalf("postgres: %v", err)
+		slog.Error("postgres unreachable at startup", "error", err)
+		return 1
 	}
 	defer pool.Close()
 
@@ -95,7 +130,8 @@ func main() {
 		Log:      slog.Default(),
 	})
 	if err != nil {
-		log.Fatalf("router: %v", err)
+		slog.Error("building the router failed", "error", err)
+		return 1
 	}
 
 	srv := &http.Server{
@@ -107,8 +143,87 @@ func main() {
 		IdleTimeout:       idleTimeout,
 	}
 
+	// SIGTERM is what an orchestrator sends on deploy, scale-down and rollback.
+	// Without this the process dies mid-response and the caller sees a connection
+	// reset that looks like a bug here.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	listenErr := make(chan error, 1)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			listenErr <- err
+			return
+		}
+		listenErr <- nil
+	}()
+
 	slog.Info("CareGraph API listening", "addr", cfg.HTTPAddr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+
+	select {
+	case err := <-listenErr:
+		if err != nil {
+			slog.Error("server stopped", "error", err)
+			return 1
+		}
+		return 0
+
+	case <-ctx.Done():
+		// Restore the default handler, so a second signal kills rather than being
+		// swallowed.
+		stop()
+		slog.Info("shutting down, draining in-flight requests",
+			"timeout", shutdownTimeout.String())
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		// Either a handler outlived its own timeout or the grace period is too short.
+		slog.Error("graceful shutdown did not finish in time", "error", err)
+		return 1
+	}
+
+	slog.Info("shutdown complete")
+	return 0
+}
+
+// runHealthcheck probes a running instance and returns an exit code.
+//
+// Exists because the runtime image is distroless: no shell, no curl, no wget, and
+// this binary is the only executable, so `HEALTHCHECK ["/api", "-healthcheck"]`
+// has to be served by the binary itself. Probes /readyz, since a healthcheck
+// gates depends_on and load-balancer membership.
+func runHealthcheck(addr string) int {
+	if addr == "" {
+		addr = ":8080"
+	}
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: cannot read address %q: %v\n", addr, err)
+		return 1
+	}
+	// A wildcard listen address is not a destination; probe the loopback instead.
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+
+	client := &http.Client{Timeout: healthcheckTimeout}
+	url := "http://" + net.JoinHostPort(host, port) + "/readyz"
+
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "healthcheck: %s returned %d\n", url, resp.StatusCode)
+		return 1
+	}
+	return 0
 }

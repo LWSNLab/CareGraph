@@ -5,12 +5,16 @@ import pandas as pd
 
 from pipelines.common import BUNDESLAENDER as _BUNDESLAENDER
 from pipelines.common import parse_bundeslaender as _parse_bundeslaender
+from pipelines.common.paths import PROCESSED_DIR
 
 
 class DataExporter:
     """Handles exporting enriched DataFrame to CSV, JSON, and SQL files."""
 
-    def __init__(self, output_dir: Path | str = Path("data/processed")):
+    def __init__(self, output_dir: Path | str = PROCESSED_DIR):
+        # Package-relative default, not cwd-relative: see pipelines/common/paths.py.
+        # Created here rather than per write — unlike the parser, an exporter is
+        # constructed in order to write, so the directory is not a side effect.
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 

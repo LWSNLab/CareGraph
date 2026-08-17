@@ -21,7 +21,6 @@ Entry points are the `run_*.py` modules at the top level.
 ```bash
 cd pipelines
 uv sync --all-groups       # venv + runtime and dev dependencies
-uv run playwright install  # browser binaries, only needed for future scrapers
 ```
 
 ## Running

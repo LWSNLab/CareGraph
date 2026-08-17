@@ -1,20 +1,13 @@
-// Package health serves the two probes an orchestrator needs, which are not the
-// same question.
+// Package health serves the two probes an orchestrator needs, which answer
+// different questions.
 //
-// **Liveness** asks whether the process is working. A failing liveness probe
-// makes Kubernetes restart the container, so it must only fail for conditions a
-// restart can fix — a deadlock, a corrupted process. If it also checked the
-// database, a database outage would restart every replica in a loop, turning a
-// recoverable dependency failure into a total one. `/healthz` therefore answers
-// as long as the process can answer, which is the whole of what it claims.
+// Liveness (/healthz) asks whether the process works. Failing it triggers a
+// restart, so it must only fail for what a restart can fix — checking the
+// database here would turn an outage into a restart loop across every replica.
 //
-// **Readiness** asks whether this instance should receive traffic right now. It
-// may fail transiently; the orchestrator takes the pod out of the load balancer
-// and puts it back when it recovers. That is where dependencies belong, and it
-// is what `/readyz` reports.
-//
-// Which dependency counts is decided by how the API actually behaves without it,
-// not by how important it sounds — see Severity.
+// Readiness (/readyz) asks whether this instance should receive traffic. It may
+// fail transiently; the orchestrator removes the instance and puts it back.
+// Dependencies belong here, weighted by Severity.
 package health
 
 import (
@@ -32,16 +25,13 @@ import (
 type Severity int
 
 const (
-	// Required: without it the API cannot answer at all. Postgres — every
-	// endpoint reads from it, so an instance without it must leave the load
-	// balancer rather than serve 500s.
+	// Required: nothing works without it, so the instance must leave the load
+	// balancer rather than serve 500s. Postgres.
 	Required Severity = iota
 
-	// Optional: the API still serves, with less. Redis — the rate limiter fails
-	// open by design, so quotas stop being enforced but requests succeed.
-	// Typesense — /search answers 503 while /near and the IK lookup are
-	// unaffected. Pulling an instance out of rotation for either would remove
-	// working capacity to fix nothing.
+	// Optional: the API still serves, with less — Redis (the limiter fails open,
+	// so quotas stop being enforced) and Typesense (only /search is affected).
+	// Removing the instance would cost capacity and fix nothing.
 	Optional
 )
 
@@ -61,17 +51,13 @@ const (
 	StatusUnavailable = "unavailable"
 )
 
-// probeTimeout bounds each dependency check. Short: a probe that hangs is
-// indistinguishable from a dependency that is down, and the orchestrator is
-// waiting.
+// A probe that hangs is indistinguishable from a dependency that is down, and
+// the orchestrator is waiting.
 const probeTimeout = 2 * time.Second
 
-// cacheTTL is how long a readiness result is reused.
-//
-// /readyz is unauthenticated and issues a query per dependency, which makes it
-// an amplification vector: without this, anyone could turn a flood of cheap HTTP
-// requests into a flood of database round trips. One second is far below any
-// sensible probe interval, so an orchestrator never sees a stale answer.
+// /readyz is unauthenticated and queries every dependency, so without a cache it
+// turns cheap HTTP requests into database round trips. A second is far below any
+// sensible probe interval.
 const cacheTTL = time.Second
 
 // Checker runs the registered probes and serves both endpoints.
@@ -79,9 +65,8 @@ type Checker struct {
 	deps []dependency
 	log  *slog.Logger
 
-	// ttl and timeout are fields rather than the constants directly so the
-	// package's own tests can shrink them. Nothing outside can set them: the
-	// values are a property of the design, not a deployment knob.
+	// Fields rather than the constants directly, so the package's own tests can
+	// shrink them. Not settable from outside — these are not deployment knobs.
 	ttl     time.Duration
 	timeout time.Duration
 
@@ -119,17 +104,12 @@ func (c *Checker) Live(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"status": StatusOK})
 }
 
-// Ready is GET /readyz.
+// Ready is GET /readyz: 503 when a Required dependency is down, 200 with
+// "degraded" when only Optional ones are.
 //
-// 503 when a Required dependency is down — this instance cannot serve, take it
-// out of rotation. 200 with status "degraded" when only Optional ones are: the
-// instance still answers most requests, and removing it would cost capacity
-// without fixing anything.
-//
-// The body names each dependency and its state but never the underlying error.
-// A driver error carries the DSN, the query and column names; this endpoint is
-// unauthenticated, so the cause goes to the log under the request id, exactly as
-// it does for a 500.
+// The body reports a state per dependency but never the underlying error — a
+// driver error carries the DSN, and this endpoint needs no credential. Causes go
+// to the log, as they do for a 500.
 func (c *Checker) Ready(ctx *gin.Context) {
 	result := c.evaluate(ctx)
 
@@ -168,8 +148,7 @@ func (c *Checker) evaluate(ctx *gin.Context) response {
 				"required", dep.severity == Required,
 				"error", err)
 
-			// A required failure wins outright; an optional one only downgrades
-			// a result that is still otherwise healthy.
+			// A required failure wins outright.
 			if dep.severity == Required {
 				result.Status = StatusUnavailable
 			} else if result.Status == StatusOK {

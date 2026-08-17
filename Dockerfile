@@ -12,4 +12,12 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/api /api
 EXPOSE 8080
 USER nonroot:nonroot
+
+# The binary probes itself: this image has no shell for a healthcheck to use.
+# /readyz rather than /healthz, because a healthcheck gates depends_on and
+# load-balancer membership — "can this serve", not "is the process alive".
+# Declared here rather than in compose so it travels with the image.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
+    CMD ["/api", "-healthcheck"]
+
 ENTRYPOINT ["/api"]
