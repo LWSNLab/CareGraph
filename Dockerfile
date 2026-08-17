@@ -13,17 +13,10 @@ COPY --from=build /out/api /api
 EXPOSE 8080
 USER nonroot:nonroot
 
-# The binary probes itself, because this image has no shell, no curl and no wget
-# for a healthcheck to invoke — /api is the only executable in it.
-#
-# It hits /readyz, not /healthz: a healthcheck gates `depends_on:
-# service_healthy` and load-balancer membership, and what those need to know is
-# "can this serve traffic", not "is the process alive". A liveness check here
-# would report healthy with an unreachable database.
-#
-# Declared here rather than in docker-compose.yml so it travels with the image —
-# anyone running it without compose gets the same check, and there is one
-# definition to keep correct.
+# The binary probes itself: this image has no shell for a healthcheck to use.
+# /readyz rather than /healthz, because a healthcheck gates depends_on and
+# load-balancer membership — "can this serve", not "is the process alive".
+# Declared here rather than in compose so it travels with the image.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
     CMD ["/api", "-healthcheck"]
 

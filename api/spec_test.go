@@ -1,21 +1,12 @@
-// Package api_test enforces that the OpenAPI document describes the service
-// that is actually built.
+// Package api_test enforces that the OpenAPI document describes the service that
+// is actually built. A drifted spec is worse than none: a generated client
+// compiles, runs, and is wrong.
 //
-// A specification maintained by hand next to code that changes is a
-// specification that drifts, and a drifted spec is worse than none: a generated
-// client compiles, runs, and is wrong. These tests fail the build instead.
+// Covers routes, the error-code and provider-type enums, the real JSON handlers
+// emit, and the framework's own failure paths.
 //
-// Four kinds of drift are covered:
-//
-//   - routes — a path served but not documented, or documented but not served;
-//   - error codes and provider types — enums read out of the Go source, so a
-//     new constant has to be documented before the build goes green;
-//   - responses — the real JSON the handlers emit, validated against the
-//     schemas, including whether the status code is documented at all;
-//   - the framework's own failure paths, which no handler writes.
-//
-// It is an external test package because internal/httpapi imports this one; the
-// cycle is only legal from _test.
+// External test package because internal/httpapi imports this one; the cycle is
+// only legal from _test.
 package api_test
 
 import (
@@ -52,11 +43,8 @@ func TestSpecIsAValidOpenAPIDocument(t *testing.T) {
 	}
 }
 
-// TestSpecDeclaresThreePointZero guards the version header against being
-// "upgraded" without converting the document. 3.1 removed `nullable` and
-// changed `exclusiveMinimum` from a boolean to a number; a 3.1 header over 3.0
-// keywords does not fail loudly, it makes generators drop what they do not
-// recognise.
+// 3.1 removed `nullable` and changed `exclusiveMinimum` to a number. A 3.1 header
+// over 3.0 keywords does not fail loudly — generators drop what they cannot read.
 func TestSpecDeclaresThreePointZero(t *testing.T) {
 	if got := loadSpec(t).OpenAPI; !strings.HasPrefix(got, "3.0.") {
 		t.Errorf("openapi = %q; the document uses 3.0 keywords and must say so", got)
@@ -65,12 +53,8 @@ func TestSpecDeclaresThreePointZero(t *testing.T) {
 
 // --- routes ---------------------------------------------------------------
 
-// TestEveryServedRouteIsDocumented builds the real router and compares it with
-// the document, in both directions.
-//
-// This is the check that would have caught `/healthz` being described under the
-// `/v1` server URL while it is served at the origin: a generated client would
-// have probed /v1/healthz and got a 404.
+// Both directions. This is the check that caught `/healthz` being documented under
+// the `/v1` server URL while it is served at the origin.
 func TestEveryServedRouteIsDocumented(t *testing.T) {
 	served := servedRoutes(t)
 	documented := documentedRoutes(t)
@@ -119,13 +103,9 @@ func documentedRoutes(t *testing.T) []string {
 
 // --- enums read out of the Go source --------------------------------------
 
-// TestErrorCodesMatchSpec keeps the `code` enum honest.
-//
-// The codes are read from internal/httpx by parsing the source rather than
-// listed here, so adding a constant to the Go file is enough to fail this test
-// until the document catches up. A hand-kept list in the test would drift in
-// exactly the same way as the document it is supposed to guard — which is how
-// `unavailable` reached the API before it reached the spec.
+// The codes are parsed out of internal/httpx rather than listed here: a hand-kept
+// list would drift exactly like the document it guards, which is how `unavailable`
+// reached the API before it reached the spec.
 func TestErrorCodesMatchSpec(t *testing.T) {
 	declared := constantsOfType(t, "../internal/httpx", "ErrorCode")
 	if len(declared) == 0 {
@@ -141,10 +121,8 @@ func TestErrorCodesMatchSpec(t *testing.T) {
 	assertSameSet(t, "error code", declared, documented)
 }
 
-// TestProviderTypesMatchSpec does the same for the provider_type enum, which is
-// mirrored in three places — the SQL enum, the Go constants and this document.
-// Go and the document are checked here; the SQL enum is covered by the
-// repository's integration tests.
+// provider_type is mirrored in three places: the SQL enum, the Go constants and
+// this document. The first is covered by the repository's integration tests.
 func TestProviderTypesMatchSpec(t *testing.T) {
 	declared := constantsOfType(t, "../internal/provider", "Type")
 	if len(declared) == 0 {
@@ -160,12 +138,8 @@ func TestProviderTypesMatchSpec(t *testing.T) {
 }
 
 // constantsOfType returns the string values of the constants declared with the
-// named type in a package directory.
-//
-// Reading the AST rather than reflecting: Go keeps no runtime information about
-// which constants of a type exist, so reflection cannot answer this question at
-// all — and the alternative, a literal list, is the drift this file exists to
-// prevent.
+// named type in a package directory. Reads the AST because Go keeps no runtime
+// record of which constants of a type exist.
 func constantsOfType(t *testing.T, dir, typeName string) []string {
 	t.Helper()
 
@@ -185,8 +159,7 @@ func constantsOfType(t *testing.T, dir, typeName string) []string {
 				if !ok || gen.Tok != token.CONST {
 					continue
 				}
-				// Within one const block a spec without a type carries the last
-				// declared one, so track it across specs.
+				// A spec without a type carries the last declared one.
 				current := ""
 				for _, spec := range gen.Specs {
 					vs, ok := spec.(*ast.ValueSpec)

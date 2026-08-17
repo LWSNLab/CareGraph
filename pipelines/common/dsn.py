@@ -1,21 +1,14 @@
-"""Resolving the Postgres DSN, and refusing to send it over the network in the clear.
+"""Resolving the Postgres DSN, and refusing to send it over a network in the clear.
 
-Two rules, both of which exist because the failure they prevent is silent.
+Two rules, both because the failure they prevent is silent. There is **no default
+DSN**: a baked-in credential is one that eventually runs somewhere it should not,
+and a typo in an environment variable would fall back to it instead of failing.
+And **no plaintext to a remote host** — an unset `sslmode` is worse than
+`disable`, because libpq treats it as `prefer` and falls back to plaintext without
+saying so.
 
-**No default DSN.** A connection string with a username and password baked into
-the source is one that eventually runs somewhere it should not, and a typo in an
-environment variable then falls back to it instead of failing. The development
-values live in `.env.example`, where they are visibly examples.
-
-**No plaintext to a remote host.** `sslmode=disable` is right for a loopback
-connection and for a container network on one host, and wrong for anything that
-crosses a network — but nothing complains, the query simply travels readable.
-The libpq default is worse than `disable`: an unset `sslmode` means `prefer`,
-which tries TLS and then *silently* falls back to plaintext, so the connection
-that looks encrypted in staging may not be in production.
-
-The same rule and the same override name apply to the Go gateway; see
-`internal/infrastructure/config.go`.
+The Go gateway applies the same rule under the same override name; see
+internal/infrastructure/dsn.go.
 """
 
 from __future__ import annotations
@@ -24,30 +17,22 @@ import os
 
 from psycopg.conninfo import conninfo_to_dict
 
-# Environment variables the runners read, in order of precedence.
-# INGEST_DATABASE_URL first: DATABASE_URL belongs to the read-only API role, and
-# loading with it would fail on the first write.
+# INGEST_DATABASE_URL first: DATABASE_URL is the read-only API role, and loading
+# with it would fail on the first write.
 DSN_ENV_VARS = ("INGEST_DATABASE_URL", "DATABASE_URL")
 
-# Set this to run a pipeline against a remote host without TLS. Named for what it
-# does rather than for an environment, so it cannot be mistaken for a general
-# "this is development" switch — see the E4-S1 story on why there is no
-# CAREGRAPH_ENV.
+# Permits a plaintext connection to a non-local host. Named for what it does, so
+# it cannot be mistaken for a general "this is development" switch.
 ALLOW_INSECURE_ENV = "CAREGRAPH_ALLOW_INSECURE_DB"
 
-# The sslmode values that actually guarantee encryption. An allowlist, not a
-# list of bad ones: anything unrecognised — a typo, a mode added by a future
-# libpq, or no sslmode at all — then fails closed instead of being waved through.
-#
-# The first draft here was a denylist of {disable, allow, prefer} and it had
-# exactly that hole: a DSN with no sslmode is the libpq default `prefer`, which
-# falls back to plaintext silently, and it passed the guard because "" was not
-# in the list of bad values.
+# An allowlist, not a list of bad values: anything unrecognised — a typo, a future
+# libpq mode, or no sslmode at all — then fails closed. A denylist of
+# {disable, allow, prefer} let a DSN with no sslmode through, which is the
+# dangerous case.
 SECURE_SSLMODES = frozenset({"require", "verify-ca", "verify-full"})
 
-# Hosts that never leave the machine. Everything else is treated as remote,
-# including a Docker service name — from inside the process there is no way to
-# tell a private bridge network from the open internet.
+# Everything else counts as remote, including a Docker service name: from inside
+# the process a private bridge network is indistinguishable from the internet.
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
 
@@ -67,9 +52,8 @@ def dsn_from_env() -> str | None:
 def checked_dsn(dsn: str | None) -> str:
     """Return a DSN that is present and safe to connect with, or raise DSNError.
 
-    This is what the runners call after parsing arguments, so that a bad
-    configuration fails before any connection is attempted rather than midway
-    through a load.
+    Called after argument parsing, so a bad configuration fails before anything
+    connects rather than midway through a load.
     """
     if dsn is None or not dsn.strip():
         raise DSNError(
@@ -105,10 +89,9 @@ def assert_transport_is_safe(dsn: str) -> None:
 def _host_and_sslmode(dsn: str) -> tuple[str, str]:
     """Pull host and sslmode out of a DSN in either supported form.
 
-    psycopg understands both a URL and a libpq keyword string, so this uses its
-    parser rather than a second one of our own. It reports what the DSN says and
-    does not apply libpq's defaults, so an absent sslmode comes back as the empty
-    string — which is not in SECURE_SSLMODES and therefore fails closed.
+    Uses psycopg's parser, which understands both a URL and a libpq keyword
+    string, rather than a second one of our own. It does not apply libpq's
+    defaults, so an absent sslmode comes back empty and fails closed.
     """
     try:
         parsed = conninfo_to_dict(dsn)
@@ -125,8 +108,7 @@ def _host_and_sslmode(dsn: str) -> tuple[str, str]:
 def _is_local(host: str) -> bool:
     """Whether a connection to host stays on this machine.
 
-    An empty host means the Unix socket, and an absolute path means a socket
-    directory; neither touches a network.
+    An empty host or an absolute path is a Unix socket.
     """
     if not host:
         return True

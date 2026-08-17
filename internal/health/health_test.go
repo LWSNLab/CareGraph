@@ -43,9 +43,8 @@ func decode(t *testing.T, rec *httptest.ResponseRecorder) response {
 func ok(context.Context) error   { return nil }
 func down(context.Context) error { return errors.New("connection refused: dial tcp 10.0.0.5:5432") }
 
-// TestSeverityDecidesTheStatusCode is the whole point of the endpoint: an
-// optional dependency going down must not take the instance out of the load
-// balancer, because that removes working capacity without fixing anything.
+// The whole point of the endpoint: an optional dependency going down must not take
+// the instance out of the load balancer.
 func TestSeverityDecidesTheStatusCode(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -77,9 +76,8 @@ func TestSeverityDecidesTheStatusCode(t *testing.T) {
 	}
 }
 
-// TestProbeErrorsNeverReachTheBody guards an unauthenticated endpoint against
-// leaking what a driver puts in its error text — here a host and port, in
-// practice a full DSN. The cause belongs in the log, as it does for a 500.
+// An unauthenticated endpoint must not leak what a driver puts in its error text —
+// here a host and port, in practice a full DSN.
 func TestProbeErrorsNeverReachTheBody(t *testing.T) {
 	rec := serve(t, New(quiet()).Register("postgres", Required, down))
 
@@ -94,9 +92,8 @@ func TestProbeErrorsNeverReachTheBody(t *testing.T) {
 	}
 }
 
-// TestResultIsCached matters because /readyz needs no credential and issues one
-// query per dependency. Without the cache, cheap HTTP requests amplify into
-// database round trips.
+// /readyz needs no credential and queries every dependency, so without the cache
+// cheap HTTP requests amplify into database round trips.
 func TestResultIsCached(t *testing.T) {
 	var calls atomic.Int64
 	c := New(quiet()).Register("postgres", Required, func(context.Context) error {
@@ -112,8 +109,8 @@ func TestResultIsCached(t *testing.T) {
 	}
 }
 
-// TestCacheExpires — the other half. A cache that never expired would report a
-// dead database as healthy for as long as the process lived.
+// The other half: a cache that never expired would report a dead database as
+// healthy for as long as the process lived.
 func TestCacheExpires(t *testing.T) {
 	var calls atomic.Int64
 	c := New(quiet()).Register("postgres", Required, func(context.Context) error {
@@ -131,8 +128,7 @@ func TestCacheExpires(t *testing.T) {
 	}
 }
 
-// TestProbeTimeoutIsEnforced: a probe that hangs is indistinguishable from a
-// dependency that is down, and the orchestrator is waiting for an answer.
+// A hanging probe is indistinguishable from a dependency that is down.
 func TestProbeTimeoutIsEnforced(t *testing.T) {
 	c := New(quiet()).Register("postgres", Required, func(ctx context.Context) error {
 		<-ctx.Done() // never returns on its own
@@ -152,9 +148,8 @@ func TestProbeTimeoutIsEnforced(t *testing.T) {
 	}
 }
 
-// TestLiveIgnoresDependencies pins the distinction the two endpoints exist for.
-// If liveness failed on a database outage, the orchestrator would restart every
-// replica in a loop — a restart cannot fix someone else's database.
+// The distinction the two endpoints exist for: liveness failing on a database
+// outage would restart every replica in a loop, and a restart fixes nothing there.
 func TestLiveIgnoresDependencies(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

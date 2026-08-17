@@ -11,21 +11,13 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// TestSchemasMatchTheGoStructs compares each response schema with the struct
-// that produces it, field by field.
+// TestSchemasMatchTheGoStructs compares each response schema with the struct that
+// produces it, field by field, in both directions.
 //
-// Validating example responses is not enough on its own, and a mutation test
-// showed why: giving a required field `omitempty` still passed, because every
-// fixture happened to set it. The field would vanish only for thin data — the
-// records nobody checks by hand. Struct tags are the thing that decides, so they
-// are what this reads.
-//
-// Three properties, each in both directions:
-//
-//   - every JSON field has a documented property, and every documented property
-//     has a JSON field;
-//   - a field without `omitempty` is always emitted, so it must be `required`;
-//   - a field with `omitempty` may be absent, so it must not be.
+// Validating example responses is not enough: a mutation test showed that giving
+// a required field `omitempty` still passed, because every fixture happened to set
+// it. The field would vanish only for thin data. Struct tags are what decides, so
+// they are what this reads.
 func TestSchemasMatchTheGoStructs(t *testing.T) {
 	doc := loadSpec(t)
 

@@ -43,18 +43,13 @@ const (
 	idleTimeout       = 60 * time.Second
 )
 
-// shutdownTimeout bounds how long a graceful stop waits for in-flight requests.
-//
-// Comfortably above httpapi.DefaultRequestTimeout (15 s), which already caps any
-// single request: a handler cannot outlive that, so this is long enough for every
-// in-flight request to finish rather than being cut off mid-response. The
-// compose service sets stop_grace_period above it, otherwise Docker would send
-// SIGKILL while the drain is still running and the point would be lost.
+// Above httpapi.DefaultRequestTimeout (15 s), which caps any single request, so
+// every in-flight request can finish. compose sets stop_grace_period above this,
+// or Docker would SIGKILL mid-drain.
 const shutdownTimeout = 20 * time.Second
 
-// healthcheckTimeout bounds the -healthcheck probe. A container healthcheck has
-// its own timeout; this only stops the process hanging if the socket accepts and
-// then goes quiet.
+// Only stops the probe hanging if the socket accepts and then goes quiet; the
+// container healthcheck has its own timeout.
 const healthcheckTimeout = 3 * time.Second
 
 func main() {
@@ -66,18 +61,16 @@ func main() {
 		os.Exit(runHealthcheck(os.Getenv("CAREGRAPH_HTTP_ADDR")))
 	}
 
-	// run rather than inlining here: log.Fatal calls os.Exit, which skips defers,
-	// so a fatal path would leak the pool and the Redis client. With an exit code
-	// returned instead, every defer runs — which is what makes the graceful
-	// shutdown below actually complete.
+	// run rather than inlining: log.Fatal calls os.Exit, which skips defers, so a
+	// fatal path would leak the pool and the Redis client.
 	os.Exit(run())
 }
 
 func run() int {
 	cfg, err := infrastructure.LoadConfig()
 	if err != nil {
-		// Before the logger is configured, so this goes to stderr plainly. It is a
-		// startup misconfiguration, not an operational event to aggregate.
+		// Before the logger exists, and a startup misconfiguration rather than an
+		// operational event, so plain stderr.
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		return 1
 	}
@@ -150,10 +143,9 @@ func run() int {
 		IdleTimeout:       idleTimeout,
 	}
 
-	// SIGTERM is what an orchestrator sends on deploy, scale-down and rollback —
-	// the routine cases, not the exceptional ones. Without this the process dies
-	// mid-response and the caller sees a connection reset that looks like a bug in
-	// the API.
+	// SIGTERM is what an orchestrator sends on deploy, scale-down and rollback.
+	// Without this the process dies mid-response and the caller sees a connection
+	// reset that looks like a bug here.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -177,8 +169,8 @@ func run() int {
 		return 0
 
 	case <-ctx.Done():
-		// Restore the default handler: a second signal from an impatient operator
-		// should kill the process rather than be swallowed by this one.
+		// Restore the default handler, so a second signal kills rather than being
+		// swallowed.
 		stop()
 		slog.Info("shutting down, draining in-flight requests",
 			"timeout", shutdownTimeout.String())
@@ -188,8 +180,7 @@ func run() int {
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		// The deadline passed with requests still running. Worth an error: it means
-		// either a handler outlived its own timeout or the grace period is too short.
+		// Either a handler outlived its own timeout or the grace period is too short.
 		slog.Error("graceful shutdown did not finish in time", "error", err)
 		return 1
 	}
@@ -198,17 +189,12 @@ func run() int {
 	return 0
 }
 
-// runHealthcheck probes a running instance over HTTP and returns an exit code.
+// runHealthcheck probes a running instance and returns an exit code.
 //
-// It exists because the runtime image is distroless: there is no shell, no curl
-// and no wget for a container healthcheck to invoke, and this binary is the only
-// executable in the image. `HEALTHCHECK ["/api", "-healthcheck"]` therefore has
-// to be served by the binary itself.
-//
-// It probes /readyz rather than /healthz. A compose healthcheck gates
-// `depends_on: service_healthy`, and what a dependent service needs to know is
-// "can this serve traffic", not "is the process alive" — which is the same
-// distinction the two endpoints exist for.
+// Exists because the runtime image is distroless: no shell, no curl, no wget, and
+// this binary is the only executable, so `HEALTHCHECK ["/api", "-healthcheck"]`
+// has to be served by the binary itself. Probes /readyz, since a healthcheck
+// gates depends_on and load-balancer membership.
 func runHealthcheck(addr string) int {
 	if addr == "" {
 		addr = ":8080"

@@ -25,14 +25,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// The key the fake store accepts. Its shape has to survive auth.SplitKey, which
-// runs before the store is consulted.
-//
-// Assembled from its parts rather than written as one `cg_<id>_<secret>`
-// literal. A single string in that shape is indistinguishable from a real
-// leaked key to a secret scanner, and the CI gitleaks job flagged exactly this
-// line. Splitting it also removes a duplicate: the id half is what stubKeys
-// reports back as the verified identity, so it now has one definition.
+// The key the fake store accepts; its shape has to survive auth.SplitKey.
+// Assembled from parts rather than one `cg_<id>_<secret>` literal, which a secret
+// scanner cannot tell from a real leaked key — the CI gitleaks job flagged it.
 const (
 	testKeyID  = "0123456789abcdef"
 	testSecret = "not-a-real-secret"
@@ -40,8 +35,7 @@ const (
 
 var testAPIKey = "cg_" + testKeyID + "_" + testSecret
 
-// Gin's access log is plain text on stdout and would bury the test output. The
-// records these tests care about go through slog, into io.Discard.
+// Keeps Gin's own writer quiet; the records these tests care about go through slog.
 func TestMain(m *testing.M) {
 	gin.DefaultWriter = io.Discard
 	os.Exit(m.Run())
@@ -92,9 +86,8 @@ func (stubKeys) Verify(_ context.Context, presented string) (*auth.Identity, err
 	}, nil
 }
 
-// deadRedis makes every script call fail. Both limiters fail open on error (see
-// auth.enforce), so the middleware runs its real code path and lets the request
-// through — no Redis needed to exercise the routes it guards.
+// Every script call fails. Both limiters fail open (auth.enforce), so the
+// middleware runs its real path and lets the request through without a Redis.
 type deadRedis struct{}
 
 var errNoRedis = errors.New("no redis in this test")
@@ -145,9 +138,8 @@ func fullProvider() provider.Provider {
 	}
 }
 
-// minimalProvider sets only what the schema requires. The interesting half of
-// the contract: everything else must genuinely be optional, and a `*string` with
-// `omitempty` must be absent rather than null.
+// Only what the schema requires: everything else must genuinely be optional, and
+// an omitempty `*string` must be absent rather than null.
 func minimalProvider() provider.Provider {
 	return provider.Provider{
 		ID:   "8f14e45f-ceea-467a-9575-4b1c0dbfda2a",
@@ -191,9 +183,8 @@ func testRouter(t *testing.T, opts ...func(*httpapi.Deps)) *gin.Engine {
 
 var errProbe = errors.New("dependency unreachable")
 
-// withProbes rebuilds the checker with the same three dependencies, failing the
-// named ones. Keeping the set identical is the point: the difference between
-// cases is severity, not which probes exist.
+// Same three dependencies, failing the named ones: the difference between cases is
+// severity, not which probes exist.
 func withProbes(failing map[string]error) func(*httpapi.Deps) {
 	return func(d *httpapi.Deps) {
 		quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -228,13 +219,10 @@ func withRepoAndSearch(repo provider.Repository, engine search.Client) func(*htt
 
 // --- response validation --------------------------------------------------
 
-// TestResponsesValidateAgainstSpec drives the real router and checks each answer
-// against the document: status code documented, headers and body matching the
-// schema.
-//
-// This is the check that catches a field renamed in Go but not in the spec, a
-// required field that stops being emitted, or a status code a handler learned to
-// return while the document still claims it cannot happen.
+// Drives the real router and checks each answer against the document: status code
+// documented, body matching the schema. Catches a field renamed in Go but not in
+// the spec, and a status code a handler learned to return while the document still
+// says it cannot happen.
 func TestResponsesValidateAgainstSpec(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -252,15 +240,13 @@ func TestResponsesValidateAgainstSpec(t *testing.T) {
 			target: "/readyz", noKey: true, want: http.StatusOK,
 		},
 		{
-			// Redis is optional: quotas stop being enforced, requests still
-			// succeed. Pulling the instance out of rotation would remove working
-			// capacity to fix nothing.
+			// Redis is optional: quotas stop being enforced, requests still succeed.
 			name:   "readyz stays ready when an optional dependency is down",
 			target: "/readyz", noKey: true, want: http.StatusOK,
 			options: []func(*httpapi.Deps){withProbes(map[string]error{"redis": errProbe})},
 		},
 		{
-			// Postgres is required: every endpoint reads from it.
+			// Postgres is required.
 			name:   "readyz reports unavailable when a required dependency is down",
 			target: "/readyz", noKey: true, want: http.StatusServiceUnavailable,
 			options: []func(*httpapi.Deps){withProbes(map[string]error{"postgres": errProbe})},
@@ -384,12 +370,9 @@ func TestResponsesValidateAgainstSpec(t *testing.T) {
 					AuthenticationFunc: openapi3filter.NoopAuthenticationFunc,
 				},
 			}
-			// Parity in the other direction. When the handler answers 400 the
-			// spec's own constraints must reject the request too, and otherwise
-			// accept it. Where the two disagree one of them is wrong: either the
-			// document permits something the API refuses, or it forbids something
-			// the API accepts — and a client that validates before sending is
-			// misled either way.
+			// Parity in the other direction: a 400 from the handler must also be a
+			// 400 by the spec's own constraints, and everything else must pass. A
+			// client that validates before sending is misled by either mismatch.
 			specErr := openapi3filter.ValidateRequest(context.Background(), input)
 			if tc.want == http.StatusBadRequest {
 				if specErr == nil {
@@ -417,12 +400,10 @@ func TestResponsesValidateAgainstSpec(t *testing.T) {
 	}
 }
 
-// TestFrameworkFailuresMatchTheErrorSchema covers the two answers no handler
-// writes — an unknown path and a wrong method. They cannot be validated through
-// the spec's router (it has no route for them by definition), so the body is
-// checked against the Error schema directly. Without this the promise that
-// *every* failure has one shape would be untested exactly where it is easiest
-// to break.
+// The two answers no handler writes. The spec's router has no route for them by
+// definition, so the body is checked against the Error schema directly — otherwise
+// the promise that *every* failure has one shape is untested where it breaks most
+// easily.
 func TestFrameworkFailuresMatchTheErrorSchema(t *testing.T) {
 	schema := loadSpec(t).Components.Schemas["Error"]
 	if schema == nil {
@@ -464,8 +445,8 @@ func TestFrameworkFailuresMatchTheErrorSchema(t *testing.T) {
 	}
 }
 
-// TestSpecIsServed proves a deployment can hand out the contract it implements,
-// unauthenticated and byte-identical to the embedded document.
+// A deployment can hand out the contract it implements, unauthenticated and
+// byte-identical to the embedded document.
 func TestSpecIsServed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	testRouter(t).ServeHTTP(rec,

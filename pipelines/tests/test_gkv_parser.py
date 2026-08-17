@@ -373,14 +373,11 @@ def test_real_list_has_no_merge_artefacts():
 
 
 def test_a_local_path_creates_no_download_directory(tmp_path):
-    """Parsing a file that is already on disk must not touch the filesystem.
+    """`download_if_url` used to mkdir unconditionally, before checking for a URL.
 
-    `download_if_url` used to `mkdir` its target unconditionally, before checking
-    whether there was anything to download. Every parse of a local PDF — every
-    run of this test suite included — left an empty directory behind, and the
-    parse needed write permission on a path it never wrote to. In the ingestion
-    container that became `PermissionError: Permission denied: 'data'` for a PDF
-    sitting on a mounted volume.
+    Every parse of a local PDF left an empty directory behind and needed write
+    permission on a path it never used — in the container, a PermissionError for a
+    PDF sitting on a mounted volume.
     """
     target = tmp_path / "raw"
     parser = GKVParser("/some/local/gkv.pdf", output_filename="gkv.pdf")
@@ -392,12 +389,9 @@ def test_a_local_path_creates_no_download_directory(tmp_path):
 def test_the_default_download_directory_is_package_relative():
     """It must not depend on the working directory.
 
-    The default was `Path("data/raw")`, resolved against wherever the command was
-    started. Everything runs from the repository root, so it pointed at
-    `<root>/data/raw` while every real input lives in `<root>/pipelines/data/raw` —
-    two directories, one always empty, and a URL download landing in the wrong
-    one. In the container it pointed outside the bind mount, so a download would
-    not have survived the run.
+    `Path("data/raw")` resolved against the caller's cwd: from the repository root
+    that is `<root>/data/raw`, while every real input lives in
+    `<root>/pipelines/data/raw`. In the container it pointed outside the bind mount.
     """
     from pipelines.common.paths import RAW_DIR
 
