@@ -41,11 +41,6 @@ func (h *Handler) WithLogger(l *slog.Logger) *Handler {
 	return &c
 }
 
-// Health is the liveness/readiness probe (GET /healthz).
-func (h *Handler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-
 // Near handles GET /v1/infrastructure/near — spatial radius search.
 func (h *Handler) Near(c *gin.Context) {
 	params, err := ParseNearParams(c.Request.URL.Query())
@@ -62,7 +57,7 @@ func (h *Handler) Near(c *gin.Context) {
 	if results == nil {
 		results = []Provider{}
 	}
-	c.JSON(http.StatusOK, gin.H{"total": len(results), "data": results})
+	c.JSON(http.StatusOK, ListResponse{Total: len(results), Data: results})
 }
 
 // Search handles GET /v1/infrastructure/search — typo-tolerant text search.
@@ -105,7 +100,7 @@ func (h *Handler) Search(c *gin.Context) {
 
 	// `total` is the engine's match count, not len(data): it is what a client
 	// needs to know there is more behind the limit.
-	c.JSON(http.StatusOK, gin.H{"total": hits.Found, "data": results})
+	c.JSON(http.StatusOK, ListResponse{Total: hits.Found, Data: results})
 }
 
 // respondSearchErr maps an engine failure. Unreachable is 503, not 500: nothing

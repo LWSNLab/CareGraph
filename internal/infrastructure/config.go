@@ -3,6 +3,7 @@
 package infrastructure
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
@@ -18,17 +19,34 @@ type Config struct {
 	LogLevel     slog.Level // minimum level written to stderr
 }
 
-// LoadConfig reads configuration from the environment, applying sane defaults
-// that match docker-compose.yml for local development.
-func LoadConfig() Config {
+// ErrNoDatabaseURL is returned when DATABASE_URL is unset.
+var ErrNoDatabaseURL = errors.New(
+	"DATABASE_URL is not set — copy .env.example to .env, or pass the DSN explicitly")
+
+// LoadConfig reads configuration from the environment.
+//
+// Addresses and URLs have defaults that match docker-compose.yml, because
+// getting one wrong produces a connection error that says so. **DATABASE_URL
+// has none**: it is the only setting that carries a credential, and a default
+// credential is one that gets deployed. `caregraph:caregraph` sat here as a
+// fallback, which meant a misspelt environment variable in production did not
+// fail — it silently looked for a database with the development password.
+//
+// The dev value now lives in .env.example, where it is visibly an example.
+func LoadConfig() (Config, error) {
+	dsn := os.Getenv("DATABASE_URL")
+	if strings.TrimSpace(dsn) == "" {
+		return Config{}, ErrNoDatabaseURL
+	}
+
 	return Config{
 		HTTPAddr:     env("CAREGRAPH_HTTP_ADDR", ":8080"),
-		DatabaseURL:  env("DATABASE_URL", "postgres://caregraph:caregraph@localhost:5433/caregraph?sslmode=disable"),
+		DatabaseURL:  dsn,
 		TypesenseURL: env("TYPESENSE_URL", "http://localhost:8108"),
 		TypesenseKey: env("TYPESENSE_API_KEY", ""),
 		RedisAddr:    env("REDIS_ADDR", "localhost:6379"),
 		LogLevel:     logLevel(env("CAREGRAPH_LOG_LEVEL", "info")),
-	}
+	}, nil
 }
 
 func env(key, fallback string) string {

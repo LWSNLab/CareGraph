@@ -63,7 +63,6 @@ func newTestServerWithLog(repo Repository, w io.Writer) *gin.Engine {
 	})))
 	r.GET("/v1/infrastructure/near", h.Near)
 	r.GET("/v1/infrastructure/:ik_nummer", h.GetByIK)
-	r.GET("/healthz", h.Health)
 	return r
 }
 
@@ -208,13 +207,6 @@ func TestNearMapsRepositoryFailureTo500(t *testing.T) {
 	}
 	if body.Code != httpx.CodeInternal {
 		t.Errorf("code = %q, want %q", body.Code, httpx.CodeInternal)
-	}
-}
-
-func TestHealth(t *testing.T) {
-	w := get(t, newTestServer(&fakeRepo{}), "/healthz")
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", w.Code)
 	}
 }
 

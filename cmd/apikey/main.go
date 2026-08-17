@@ -18,13 +18,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/LWSNLab/caregraph/internal/auth"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-const defaultDSN = "postgres://caregraph:caregraph@localhost:5433/caregraph?sslmode=disable"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -39,7 +38,12 @@ func run(args []string) error {
 	}
 
 	fs := flag.NewFlagSet(args[0], flag.ExitOnError)
-	dsn := fs.String("dsn", env("ADMIN_DATABASE_URL", defaultDSN),
+
+	// No compiled-in fallback. This connects as an *owner-level* role — the most
+	// privileged credential in the repository — and a default credential is one
+	// that eventually runs somewhere it should not. The development value lives
+	// in .env.example, where it is visibly an example.
+	dsn := fs.String("dsn", os.Getenv("ADMIN_DATABASE_URL"),
 		"Postgres DSN of an owner-level role (defaults to $ADMIN_DATABASE_URL)")
 	name := fs.String("name", "", "who the key is issued to (issue)")
 	tier := fs.String("tier", string(auth.TierCommunity), "community|enterprise (issue)")
@@ -47,6 +51,11 @@ func run(args []string) error {
 	keyID := fs.String("key-id", "", "public key id (revoke)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
+	}
+
+	if strings.TrimSpace(*dsn) == "" {
+		return errors.New("no database DSN — set ADMIN_DATABASE_URL or pass --dsn " +
+			"(copy .env.example to .env for the local development value)")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -175,11 +184,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
-}
-
-func env(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

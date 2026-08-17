@@ -1,0 +1,20 @@
+# Findings the gitleaks history scan reports that are not secrets.
+#
+# Each entry is <commit>:<file>:<rule>:<line> and must name a specific commit,
+# so nothing here can silence a future leak — a real one would arrive in a new
+# commit with a different fingerprint. Keep it that way: no wildcards, and one
+# comment per entry saying why.
+#
+# --- 1 -----------------------------------------------------------------------
+# api/contract_test.go declared an invented API key as a single
+# `cg_<id>_<secret>` literal, which a scanner cannot tell apart from a real
+# leaked one. It never authenticated anything: the only thing that accepts it is
+# a stub in the same file, and the value is compared verbatim.
+#
+# The line has since been rewritten to assemble the key from named parts, so the
+# working tree is clean and no new commit reproduces this. Only the historical
+# commit still holds the old text, and this entry covers exactly that commit.
+#
+# Once this branch is squash-merged, develop's history contains only the
+# rewritten version and this file can be deleted.
+9695e7df875f789cc5a5a1227fe923ef9607438a:api/contract_test.go:generic-api-key:29
