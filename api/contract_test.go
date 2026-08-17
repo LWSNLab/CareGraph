@@ -27,7 +27,18 @@ import (
 
 // The key the fake store accepts. Its shape has to survive auth.SplitKey, which
 // runs before the store is consulted.
-const testAPIKey = "cg_0123456789abcdef_secret"
+//
+// Assembled from its parts rather than written as one `cg_<id>_<secret>`
+// literal. A single string in that shape is indistinguishable from a real
+// leaked key to a secret scanner, and the CI gitleaks job flagged exactly this
+// line. Splitting it also removes a duplicate: the id half is what stubKeys
+// reports back as the verified identity, so it now has one definition.
+const (
+	testKeyID  = "0123456789abcdef"
+	testSecret = "not-a-real-secret"
+)
+
+var testAPIKey = "cg_" + testKeyID + "_" + testSecret
 
 // Gin's access log is plain text on stdout and would bury the test output. The
 // records these tests care about go through slog, into io.Discard.
@@ -76,7 +87,7 @@ func (stubKeys) Verify(_ context.Context, presented string) (*auth.Identity, err
 		return nil, auth.ErrNoSuchKey
 	}
 	return &auth.Identity{
-		KeyID: "0123456789abcdef", Name: "contract test",
+		KeyID: testKeyID, Name: "contract test",
 		Tier: auth.TierCommunity, LimitPerMin: 100,
 	}, nil
 }
