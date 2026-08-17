@@ -27,7 +27,8 @@ type Address struct {
 }
 
 // Provider is a single care-infrastructure entity, matching the API's
-// CareProvider schema (docs/api/openapi.yaml).
+// CareProvider schema in api/openapi.yaml — enforced by api/schema_test.go,
+// which compares these tags against that schema in both directions.
 type Provider struct {
 	ID                 string         `json:"id"`
 	IKNummer           *string        `json:"ik_nummer,omitempty"`
