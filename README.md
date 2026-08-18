@@ -113,6 +113,30 @@ The API container reports its own health — the binary probes its `/readyz`, si
 the image is distroless and has no shell for curl — so `docker compose ps` tells
 you whether it can actually serve, not just whether the process started.
 
+### Deploying with TLS
+
+`docker-compose.prod.yml` is an overlay, never used on its own. It puts Caddy in
+front, restarts everything after a reboot, and stops publishing the API, the
+database, Redis and Typesense to the internet:
+
+```bash
+cp .env.example .env    # set CAREGRAPH_DOMAIN and ACME_EMAIL
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile app --profile edge up -d
+```
+
+Caddy obtains and renews the Let's Encrypt certificate itself, and compresses
+responses — the API does not, and the 21 KB contract drops to 6 KB.
+
+**`CAREGRAPH_TRUSTED_PROXIES` matters.** Behind a proxy the API otherwise sees
+only the proxy's address, so every client shares one rate-limit bucket and one
+failed-authentication budget: a single abusive client would lock out everyone.
+The overlay sets it to the compose network. Set it to your proxy and nothing
+else — trusting more lets a client forge its own address.
+
+To try the whole thing without a public domain, set `CADDY_GLOBAL_EXTRA=local_certs`
+and Caddy will use its own CA.
+
 **A remote database must use TLS.** Both the API and the pipelines refuse
 `sslmode=disable` — and an *unset* `sslmode`, which libpq treats as `prefer` and
 silently downgrades — against anything that is not loopback. Use

@@ -17,6 +17,11 @@ type Config struct {
 	TypesenseKey string     // Typesense API key
 	RedisAddr    string     // Redis address for rate limiting
 	LogLevel     slog.Level // minimum level written to stderr
+
+	// TrustedProxies are the addresses or CIDRs whose X-Forwarded-For header may
+	// be believed. Empty means trust none, so ClientIP() reports the peer that
+	// actually connected.
+	TrustedProxies []string
 }
 
 // ErrNoDatabaseURL is returned when DATABASE_URL is unset.
@@ -47,12 +52,13 @@ func LoadConfig() (Config, error) {
 	}
 
 	return Config{
-		HTTPAddr:     env("CAREGRAPH_HTTP_ADDR", ":8080"),
-		DatabaseURL:  dsn,
-		TypesenseURL: env("TYPESENSE_URL", "http://localhost:8108"),
-		TypesenseKey: env("TYPESENSE_API_KEY", ""),
-		RedisAddr:    env("REDIS_ADDR", "localhost:6379"),
-		LogLevel:     logLevel(env("CAREGRAPH_LOG_LEVEL", "info")),
+		HTTPAddr:       env("CAREGRAPH_HTTP_ADDR", ":8080"),
+		DatabaseURL:    dsn,
+		TypesenseURL:   env("TYPESENSE_URL", "http://localhost:8108"),
+		TypesenseKey:   env("TYPESENSE_API_KEY", ""),
+		RedisAddr:      env("REDIS_ADDR", "localhost:6379"),
+		LogLevel:       logLevel(env("CAREGRAPH_LOG_LEVEL", "info")),
+		TrustedProxies: trustedProxies(os.Getenv("CAREGRAPH_TRUSTED_PROXIES")),
 	}, nil
 }
 
@@ -77,4 +83,24 @@ func logLevel(name string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// trustedProxies parses the comma-separated CAREGRAPH_TRUSTED_PROXIES list.
+//
+// Empty by default, and deliberately so: trusting X-Forwarded-For from anyone
+// lets a client spoof its own address and walk around the per-address
+// failed-authentication budget. Set it only to the reverse proxy in front, and
+// only to that.
+//
+// It has to be set once there *is* a proxy, or the opposite failure appears:
+// ClientIP() returns the proxy's address for every request, so all clients share
+// one rate-limit bucket and one failed-auth budget.
+func trustedProxies(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

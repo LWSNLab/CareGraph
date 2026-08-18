@@ -122,12 +122,18 @@ func run() int {
 		Register("redis", health.Optional, limiter.Ping).
 		Register("search", health.Optional, searchClient.Ping)
 
+	if len(cfg.TrustedProxies) > 0 {
+		slog.Info("trusting X-Forwarded-For from these proxies only",
+			"proxies", cfg.TrustedProxies)
+	}
+
 	r, err := httpapi.NewRouter(httpapi.Deps{
-		Provider: handler,
-		Health:   checker,
-		Keys:     keys,
-		Limiter:  limiter,
-		Log:      slog.Default(),
+		Provider:       handler,
+		Health:         checker,
+		Keys:           keys,
+		Limiter:        limiter,
+		Log:            slog.Default(),
+		TrustedProxies: cfg.TrustedProxies,
 	})
 	if err != nil {
 		slog.Error("building the router failed", "error", err)

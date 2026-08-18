@@ -32,6 +32,10 @@ type Deps struct {
 	Limiter  *ratelimit.Limiter
 	Log      *slog.Logger
 
+	// TrustedProxies are the addresses whose X-Forwarded-For may be believed.
+	// Empty trusts none — see the comment at SetTrustedProxies below.
+	TrustedProxies []string
+
 	// RequestTimeout defaults to DefaultRequestTimeout when zero.
 	RequestTimeout time.Duration
 }
@@ -54,11 +58,16 @@ func NewRouter(d Deps) (*gin.Engine, error) {
 	// distinguishes the two when this is on, and fills in the Allow header.
 	r.HandleMethodNotAllowed = true
 
-	// Trust no proxy headers by default, so ClientIP() reports the peer that
-	// actually connected — a trusted X-Forwarded-For could be spoofed to walk
-	// around the per-client failed-auth budget. A deployment behind a load
-	// balancer must set this to that balancer's address, and only that.
-	if err := r.SetTrustedProxies(nil); err != nil {
+	// Both directions of this are a real failure, which is why it is explicit.
+	//
+	// Trusting everyone lets a client forge X-Forwarded-For and walk around the
+	// per-address failed-auth budget. Trusting nobody while a proxy *is* in front
+	// makes ClientIP() report the proxy for every request, so every client shares
+	// one rate-limit bucket and one failed-auth budget — one bad client would lock
+	// out all of them.
+	//
+	// So: empty behind nothing, and exactly the proxy's address behind one.
+	if err := r.SetTrustedProxies(d.TrustedProxies); err != nil {
 		return nil, err
 	}
 
