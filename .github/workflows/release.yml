@@ -1,0 +1,76 @@
+name: Release
+
+# Merging into main is the release. This builds both images and pushes them to
+# GHCR; the server pulls them (deploy/update.sh) rather than being pushed to, so
+# nothing here needs credentials for the machine and no inbound port is opened.
+#
+# GHCR is free for public repositories. While the repository is private the
+# ingestion image alone (~377 MB) would nearly fill the free package quota — one
+# more reason the first merge to main should come after E5-S1.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    name: Build and push images
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # GHCR requires a lowercase path; the org is spelled LWSNLab.
+      - name: Work out the tags
+        id: meta
+        run: |
+          set -euo pipefail
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "registry=ghcr.io/${owner}" >> "$GITHUB_OUTPUT"
+          echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" \
+          | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Two tags each: `latest` is what the server pulls, `sha-…` is immutable so
+      # a rollback names a specific build rather than "whatever was there before".
+      - name: API image
+        run: |
+          set -euo pipefail
+          img="${{ steps.meta.outputs.registry }}/caregraph-api"
+          docker build -t "$img:latest" -t "$img:${{ steps.meta.outputs.sha }}" .
+          docker push "$img:latest"
+          docker push "$img:${{ steps.meta.outputs.sha }}"
+
+      - name: Ingestion image
+        run: |
+          set -euo pipefail
+          img="${{ steps.meta.outputs.registry }}/caregraph-ingest"
+          docker build -f Dockerfile.ingest \
+            -t "$img:latest" -t "$img:${{ steps.meta.outputs.sha }}" .
+          docker push "$img:latest"
+          docker push "$img:${{ steps.meta.outputs.sha }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.registry }}/caregraph-api:${{ steps.meta.outputs.sha }}"
+            echo "${{ steps.meta.outputs.registry }}/caregraph-ingest:${{ steps.meta.outputs.sha }}"
+            echo '```'
+            echo
+            echo "The server picks these up on its next update run, or immediately with"
+            echo '`deploy/update.sh`.'
+          } >> "$GITHUB_STEP_SUMMARY"

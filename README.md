@@ -115,12 +115,14 @@ you whether it can actually serve, not just whether the process started.
 
 ### Deploying with TLS
 
+**Step by step: [deploy/README.md](./deploy/README.md).**
+
 `docker-compose.prod.yml` is an overlay, never used on its own. It puts Caddy in
-front, restarts everything after a reboot, and stops publishing the API, the
-database, Redis and Typesense to the internet:
+front, restarts everything after a reboot, and stops publishing anything but
+Caddy to the internet:
 
 ```bash
-cp .env.example .env    # set CAREGRAPH_DOMAIN and ACME_EMAIL
+make env-prod DOMAIN=api.example.de EMAIL=you@example.de
 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   --profile app --profile edge up -d
 ```

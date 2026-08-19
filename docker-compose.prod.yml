@@ -32,6 +32,10 @@ services:
 
   api:
     restart: unless-stopped
+    # Pulled from GHCR, not built here: the image CI tested is the image that
+    # runs. `build:` is inherited from the base file and only used with --build,
+    # which is the fallback when there is no registry access.
+    image: ${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}/caregraph-api:${CAREGRAPH_TAG:-latest}
     ports: !override
       # Loopback only — publishing it would let anyone bypass TLS. Still
       # published so an operator can curl it on the box.
@@ -43,7 +47,14 @@ services:
 
   db:
     restart: unless-stopped
-    ports: !override []
+    ports: !override
+      # Loopback only, not removed entirely: `make apikeys` runs the Go CLI on
+      # the host, and issuing a key is the one routine operator task. Unreachable
+      # from off the machine either way.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+
+  ingest:
+    image: ${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}/caregraph-ingest:${CAREGRAPH_TAG:-latest}
 
   redis:
     restart: unless-stopped

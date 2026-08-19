@@ -17,8 +17,9 @@ info:
   version: 1.0.0
   contact:
     name: CareGraph
-    url: https://caregraph.de
-    email: support@caregraph.de
+    # The repository rather than an address: an inbox that does not receive mail
+    # is worse than none, and a published address gets scraped.
+    url: https://github.com/LWSNLab/CareGraph
   license:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html

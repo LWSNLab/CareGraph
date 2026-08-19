@@ -1,0 +1,10 @@
+[Unit]
+Description=Pull and apply the current CareGraph release
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=caregraph
+WorkingDirectory=/home/caregraph/CareGraph
+ExecStart=/home/caregraph/CareGraph/deploy/update.sh
