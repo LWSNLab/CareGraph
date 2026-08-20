@@ -7,7 +7,9 @@ and care data (GKV insurers, outpatient care services, nursing homes, advice
 centers) into one PostGIS-backed graph.
 
 **Documentation:** [LWSNLab/CareGraph_Doc](https://github.com/LWSNLab/CareGraph_Doc) ·
-**License:** [AGPLv3](./LICENSE)
+**License:** [AGPLv3](./LICENSE) ·
+**Changes:** [CHANGELOG.md](./CHANGELOG.md) ·
+**Deploying:** [deploy/README.md](./deploy/README.md)
 
 ---
 

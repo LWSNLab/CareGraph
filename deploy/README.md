@@ -34,8 +34,17 @@ fails if the name does not yet resolve.
 api.caregraph.de.  A  <server-ip>
 ```
 
-Let's Encrypt rate-limits failed issuance, so it is worth confirming with `dig`
-first rather than restarting the stack repeatedly.
+**Check the address, not just that it resolves.** Registrars often leave a
+wildcard record pointing at a parking page, so every name under the domain
+answers — including one that has no record of its own. Caddy would then send the
+ACME challenge to the parking server, which cannot answer it, and Let's Encrypt
+rate-limits failed issuance.
+
+```bash
+dig +short api.caregraph.de     # must be the server, not the registrar's parking IP
+```
+
+A specific record wins over a wildcard, so the wildcard need not be removed.
 
 ## 3. The checkout
 
@@ -142,6 +151,36 @@ The dump carries password hashes and the whole dataset. Treat it like `.env`, an
 copy it off the machine — a backup on the disk you are protecting against is not
 one.
 
+## Cutting a release
+
+Two things are written by hand — the version and the notes. Everything after
+that is automatic.
+
+```bash
+make set-version VERSION=0.2.0     # VERSION, pyproject.toml, openapi.yaml
+$EDITOR CHANGELOG.md               # add a `## [0.2.0]` section
+```
+
+One version, set by hand. The API contract is not versioned separately — its
+breaking version is the `/v1` in every path. The concept is in the documentation
+repository under Architecture → Versioning.
+
+Commit, merge into `main`. The workflow publishes the images and creates the
+release — which creates the tag `v0.2.0` with it — using your changelog section
+as the release text. A merge that leaves `VERSION`
+alone releases nothing — the tag already exists, so an ordinary fix does not cut
+a release.
+
+Tests hold it together: the three copies of the version must agree, and the
+version must have a non-empty changelog entry. Both fail in the pull request
+rather than at release time, so a half-applied bump cannot ship.
+
+The dataset is attached separately, because CI has no database to export from:
+
+```bash
+make dataset-release               # exports and uploads to the latest release
+```
+
 ## Updating
 
 **A merge into `main` is a release.** `.github/workflows/release.yml` builds both
@@ -152,6 +191,17 @@ no server credentials at GitHub.
 ```bash
 deploy/update.sh
 ```
+
+It pulls, restarts, **applies the migrations** and then checks
+`https://<domain>/readyz` before calling the update successful. The migration
+step matters: the compose mount only runs them when the volume is empty, so
+without it an update would leave an existing database on the old schema — the API
+would start, its readiness probe would pass on a plain ping, and every query
+would fail.
+
+A failed check does not roll back on its own. Migrations have already been
+applied by then, and an older image against a newer schema can be worse than the
+problem. The script says what to do instead.
 
 Automatically, every ten minutes:
 

@@ -14,7 +14,9 @@ info:
 
     Served under `/v1`. The version is in the path, so a breaking change arrives
     as `/v2` and never as a changed meaning of an existing field.
-  version: 1.0.0
+  # The release serving this document, written by `make set-version`. The
+  # contract's *breaking* version is the `/v1` in every path, not this number.
+  version: 0.1.0
   contact:
     name: CareGraph
     # The repository rather than an address: an inbox that does not receive mail

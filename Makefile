@@ -1,4 +1,4 @@
-.PHONY: help up down stack images logs ps migrate tidy api fmt pipelines env-prod db-roles backup restore
+.PHONY: help up down stack images logs ps migrate tidy api fmt pipelines env-prod db-roles backup restore set-version dataset-release
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_%-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -33,6 +33,26 @@ migrate: ## Apply ALL migrations to the running db, in order
 		echo "applying $$m"; \
 		docker compose exec -T db psql -U $${POSTGRES_USER:-caregraph} -d $${POSTGRES_DB:-caregraph} -v ON_ERROR_STOP=1 -q < $$m || exit 1; \
 	done
+
+set-version: ## Set the release version everywhere (VERSION=1.2.3)
+	@echo "$(VERSION)" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$' \
+		|| { echo 'usage: make set-version VERSION=1.2.3'; exit 1; }
+	@echo "$(VERSION)" > VERSION
+	@perl -pi -e 's/^version = ".*"/version = "$(VERSION)"/ if $$. < 10' pipelines/pyproject.toml
+	@perl -pi -e 's/^  version: .*/  version: $(VERSION)/ if $$. < 30' api/openapi.yaml
+	@go test ./api/ -run 'Version|Changelog' >/dev/null \
+		&& echo "version $(VERSION) set in VERSION, pyproject.toml and openapi.yaml"
+	@echo "now add a ## [$(VERSION)] section to CHANGELOG.md, then merge to main"
+
+dataset-release: ## Export the dataset and attach it to a release (TAG=v0.1.0, default: latest)
+	@command -v gh >/dev/null || { echo "needs the gh CLI"; exit 1; }
+	$(call with_env, uv run --project pipelines python -m pipelines.run_dataset export)
+	@tag="$(or $(TAG),$$(gh release list --limit 1 --json tagName -q '.[0].tagName'))"; \
+		test -n "$$tag" || { echo "no release to attach to — cut one first"; exit 1; }; \
+		file=$$(ls -t dist/caregraph-providers-*.tar.gz | head -1); \
+		echo "attaching $$file to $$tag"; \
+		gh release upload "$$tag" "$$file" --clobber
+	@echo "the release page now serves the dataset the README points at"
 
 env-prod: ## Write a production .env with generated secrets (refuses to overwrite)
 	@test ! -f .env || { echo "refusing: .env exists — move it aside first"; exit 1; }
