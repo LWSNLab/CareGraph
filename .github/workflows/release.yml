@@ -1,0 +1,129 @@
+name: Release
+
+# Two files decide a release, both written by a person: `VERSION` and its section
+# in `CHANGELOG.md`. Merging them into main publishes the images and creates the
+# release — which creates the tag with it.
+#
+# Neither is derived from commits. A generated list of pull request titles says
+# that something changed; a written entry says what it means for whoever runs
+# this. Squash titles here have also read "Feature/e4 s1 containerization", which
+# no parser can classify.
+#
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # The same checks every branch gets. Without this the release would merely run
+  # beside CI rather than behind it, and could publish a failing build.
+  quality:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Read VERSION
+        id: v
+        run: |
+          set -euo pipefail
+          version=$(tr -d '[:space:]' < VERSION)
+          echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::VERSION is '$version', want MAJOR.MINOR.PATCH"; exit 1; }
+
+          if git rev-parse "v$version" >/dev/null 2>&1; then
+            echo "tag v$version already exists — nothing to release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "version=$version"        >> "$GITHUB_OUTPUT"
+          echo "registry=ghcr.io/$owner" >> "$GITHUB_OUTPUT"
+
+      # The same check the test suite runs, so a half-applied bump cannot ship:
+      # VERSION, openapi.yaml and pyproject.toml must agree.
+      - uses: actions/setup-go@v7
+        if: steps.v.outputs.release == 'true'
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      # VERSION, pyproject.toml and openapi.yaml must agree, and the version must
+      # have a changelog entry — the same checks that run on every pull request.
+      - name: Versions agree, and the changelog has an entry
+        if: steps.v.outputs.release == 'true'
+        run: go test ./api/ -run 'Version|Changelog'
+
+      - name: Log in to GHCR
+        if: steps.v.outputs.release == 'true'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" \
+          | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Three tags: the version for pinning, `latest` for the server to follow,
+      # and the commit so a build is traceable to a source revision.
+      - name: Images
+        if: steps.v.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          v="${{ steps.v.outputs.version }}"
+          sha="sha-$(git rev-parse --short HEAD)"
+
+          for name in api ingest; do
+            img="${{ steps.v.outputs.registry }}/caregraph-$name"
+            if [ "$name" = api ]; then file=Dockerfile; else file=Dockerfile.ingest; fi
+            docker build -f "$file" \
+              --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+              --label "org.opencontainers.image.revision=${{ github.sha }}" \
+              --label "org.opencontainers.image.version=$v" \
+              -t "$img:v$v" -t "$img:latest" -t "$img:$sha" .
+            docker push --all-tags "$img"
+          done
+
+      - name: Release
+        if: steps.v.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.v.outputs.version }}"
+
+          scripts/changelog-section.sh "$v" > notes.md
+          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no entry for $v"; exit 1; }
+
+          {
+            echo
+            echo "---"
+            echo
+            echo '```'
+            echo "${{ steps.v.outputs.registry }}/caregraph-api:v$v"
+            echo "${{ steps.v.outputs.registry }}/caregraph-ingest:v$v"
+            echo '```'
+            echo
+            echo "A running deployment picks these up within ten minutes, or"
+            echo "immediately with \`deploy/update.sh\`. The provider dataset is"
+            echo "attached separately — it is exported from a loaded database, which"
+            echo "CI does not have."
+          } >> notes.md
+
+          # Creates the tag as well: gh tags the checked-out commit when no
+          # matching tag exists.
+          gh release create "v$v" --title "v$v" --notes-file notes.md \
+            --target "${{ github.sha }}"

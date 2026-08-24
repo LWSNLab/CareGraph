@@ -1,0 +1,46 @@
+name: Feature request
+description: Propose something CareGraph should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The [roadmap](https://github.com/LWSNLab/CareGraph_Doc) carries the
+        planned work at story level — worth a look first, in case this is already
+        there or was deliberately left out.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What you are trying to do and where CareGraph stops you. Describe the
+        problem rather than the solution — there is often a cheaper way to it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - API surface (a new endpoint, a new parameter)
+        - Data (a new source, better coverage)
+        - Deployment and operations
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        A new endpoint means a change to `api/openapi.yaml` — the contract is a
+        build gate, not documentation written afterwards. Worth knowing before
+        you start on a pull request.

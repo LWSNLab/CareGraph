@@ -1,0 +1,56 @@
+name: API key request
+description: Ask for a key to a hosted CareGraph instance.
+labels: [api-key]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keys are issued by hand, so this takes a few days rather than a few
+        seconds. Running your own instance needs no request at all —
+        `make apikey-dev` issues one against your own database.
+
+        **This issue is public.** Do not post an address, a phone number or
+        anything else you would not publish. The key itself is never posted here
+        — a maintainer will arrange a private channel for that.
+
+  - type: textarea
+    id: use
+    attributes:
+      label: What are you building
+      description: >
+        A sentence or two. This is the whole point of issuing by hand: knowing
+        who uses the data and what for is worth more than a signup counter.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Expected volume
+      options:
+        - Occasional — trying it out, a prototype
+        - Regular — an application with real users
+        - High — bulk or continuous querying
+    validations:
+      required: true
+
+  - type: input
+    id: who
+    attributes:
+      label: Who you are
+      description: >
+        A name, a project, or an institution. Optional, and a GitHub account is
+        enough.
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Please confirm
+      options:
+        - label: >
+            I understand the data is published under ODbL and that attribution —
+            © OpenStreetMap contributors — is required when I redistribute it.
+          required: true
+        - label: >
+            I have not posted personal contact details in this issue.
+          required: true

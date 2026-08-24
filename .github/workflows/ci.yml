@@ -10,6 +10,8 @@ on:
   pull_request:
     branches: [main, develop]
   workflow_dispatch: {}
+  # Callable, so the release workflow can gate on it instead of racing it.
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -66,14 +68,22 @@ jobs:
 
       # A service container does not run docker-entrypoint-initdb.d, so the
       # migrations have to be applied explicitly here.
-      - name: Apply database migrations
+      # Applied twice on purpose. `deploy/update.sh` re-applies every migration on
+      # every update, because the compose mount only runs them on an empty volume
+      # — so a migration that cannot be re-run would break a production update.
+      # Today they all can, but by nature rather than by design.
+      - name: Apply database migrations, twice
         env:
           PGPASSWORD: caregraph
         run: |
           set -euo pipefail
-          for migration in db/migrations/*.sql; do
-            echo "applying $migration"
-            psql -h localhost -U caregraph -d caregraph -v ON_ERROR_STOP=1 -f "$migration"
+          for pass in 1 2; do
+            echo "::group::migrations, pass $pass"
+            for migration in db/migrations/*.sql; do
+              echo "applying $migration"
+              psql -h localhost -U caregraph -d caregraph -v ON_ERROR_STOP=1 -f "$migration"
+            done
+            echo "::endgroup::"
           done
 
       - name: Verify formatting

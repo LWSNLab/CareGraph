@@ -1,0 +1,57 @@
+name: Data correction
+description: A record is wrong, missing, or should not be published.
+labels: [data]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Corrections are as valuable as code. The one thing they need is a
+        **source** — records are re-derived on every ingestion run, so a fix
+        without one gets overwritten by the next run.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind
+      options:
+        - A value is wrong
+        - A record is missing
+        - A record is a duplicate
+        - A record should be removed (see below)
+    validations:
+      required: true
+
+  - type: input
+    id: record
+    attributes:
+      label: Which record
+      description: An IK number, a name and place, or the OSM id.
+      placeholder: "Pflegedienst Muster, Münster — osm:way/123456789"
+    validations:
+      required: true
+
+  - type: textarea
+    id: correction
+    attributes:
+      label: What it should say
+    validations:
+      required: true
+
+  - type: input
+    id: source
+    attributes:
+      label: Source
+      description: >
+        Where the better value comes from — an official directory, a register
+        entry, the provider's own site. "I know the place" is a fine answer for a
+        missing record; it is not enough to overwrite an official value.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **Asking for removal.** Some care providers are sole traders, so their
+        published contact data can be personal data under the GDPR. If you are
+        asking for your own record to be removed or corrected, say so — that
+        request is handled on its own terms and does not need a source.

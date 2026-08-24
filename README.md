@@ -7,7 +7,10 @@ and care data (GKV insurers, outpatient care services, nursing homes, advice
 centers) into one PostGIS-backed graph.
 
 **Documentation:** [LWSNLab/CareGraph_Doc](https://github.com/LWSNLab/CareGraph_Doc) ·
-**License:** [AGPLv3](./LICENSE)
+**License:** [AGPLv3](./LICENSE) ·
+**Changes:** [CHANGELOG.md](./CHANGELOG.md) ·
+**Deploying:** [deploy/README.md](./deploy/README.md) ·
+**Contributing:** [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 ---
 
@@ -51,6 +54,10 @@ make api         # runs on :8080
 # 4) Issue yourself an API key (printed once)
 make apikey-dev
 ```
+
+Your own instance needs no permission from anyone. For a key to a **hosted**
+instance, open an [API key request](https://github.com/LWSNLab/CareGraph/issues/new/choose) —
+keys are issued by hand, so it takes a few days.
 
 Smoke test — `/healthz` is public, everything under `/v1` needs the key:
 
@@ -112,6 +119,32 @@ may point at a database that compose does not manage.
 The API container reports its own health — the binary probes its `/readyz`, since
 the image is distroless and has no shell for curl — so `docker compose ps` tells
 you whether it can actually serve, not just whether the process started.
+
+### Deploying with TLS
+
+**Step by step: [deploy/README.md](./deploy/README.md).**
+
+`docker-compose.prod.yml` is an overlay, never used on its own. It puts Caddy in
+front, restarts everything after a reboot, and stops publishing anything but
+Caddy to the internet:
+
+```bash
+make env-prod DOMAIN=api.example.de EMAIL=you@example.de
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile app --profile edge up -d
+```
+
+Caddy obtains and renews the Let's Encrypt certificate itself, and compresses
+responses — the API does not, and the 21 KB contract drops to 6 KB.
+
+**`CAREGRAPH_TRUSTED_PROXIES` matters.** Behind a proxy the API otherwise sees
+only the proxy's address, so every client shares one rate-limit bucket and one
+failed-authentication budget: a single abusive client would lock out everyone.
+The overlay sets it to the compose network. Set it to your proxy and nothing
+else — trusting more lets a client forge its own address.
+
+To try the whole thing without a public domain, set `CADDY_GLOBAL_EXTRA=local_certs`
+and Caddy will use its own CA.
 
 **A remote database must use TLS.** Both the API and the pipelines refuse
 `sslmode=disable` — and an *unset* `sslmode`, which libpq treats as `prefer` and

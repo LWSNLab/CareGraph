@@ -1,9 +1,0 @@
-# Findings that are not secrets. Entries are <commit>:<file>:<rule>:<line> and
-# must name a specific commit, so nothing here can silence a future leak.
-
-# An invented API key written as one `cg_<id>_<secret>` literal; only a stub in
-# the same file ever accepted it. The line has since been rewritten to assemble
-# the key from parts, so only this historical commit still holds the old text.
-# Droppable once the merged feature/e3-s5-openapi-docs branch is deleted on
-# origin — the scan walks every ref, not just develop.
-9695e7df875f789cc5a5a1227fe923ef9607438a:api/contract_test.go:generic-api-key:29

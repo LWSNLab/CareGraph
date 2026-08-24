@@ -1,0 +1,44 @@
+# TLS termination in front of the API. Caddy obtains and renews the certificate
+# itself, which is why it is here rather than nginx plus a certbot cron job.
+
+{
+	email {$ACME_EMAIL}
+
+	# Nothing reloads config at runtime, so off rather than merely unexposed.
+	admin off
+
+	# CADDY_GLOBAL_EXTRA=local_certs uses Caddy's own CA, for testing without a
+	# public domain.
+	{$CADDY_GLOBAL_EXTRA}
+}
+
+{$CAREGRAPH_DOMAIN} {
+	# The API does not compress. The explicit match is needed because Caddy's
+	# default list omits application/yaml — the 21 KB contract, 6 KB gzipped.
+	encode zstd gzip {
+		match {
+			header Content-Type text/*
+			header Content-Type application/json*
+			header Content-Type application/yaml*
+		}
+	}
+
+	# Caddy overwrites X-Forwarded-For with the real peer, so it cannot be forged.
+	# The API believes it only because CAREGRAPH_TRUSTED_PROXIES names this
+	# network; without that every client shares one rate-limit bucket.
+	#
+	# No active health check on purpose: with a single upstream there is nothing to
+	# fail over to, and marking it unhealthy makes Caddy answer 503 for every path —
+	# measured with the database stopped, /healthz and /openapi.yaml became 503
+	# while the API served both with 200.
+	reverse_proxy api:8080
+
+	# Once sent, browsers refuse plain HTTP for this domain until it expires.
+	# Raise it after the certificate has renewed at least once.
+	header Strict-Transport-Security "max-age=2592000"
+
+	log {
+		output stdout
+		format json
+	}
+}
