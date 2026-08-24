@@ -9,7 +9,8 @@ centers) into one PostGIS-backed graph.
 **Documentation:** [LWSNLab/CareGraph_Doc](https://github.com/LWSNLab/CareGraph_Doc) ·
 **License:** [AGPLv3](./LICENSE) ·
 **Changes:** [CHANGELOG.md](./CHANGELOG.md) ·
-**Deploying:** [deploy/README.md](./deploy/README.md)
+**Deploying:** [deploy/README.md](./deploy/README.md) ·
+**Contributing:** [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 ---
 
@@ -53,6 +54,10 @@ make api         # runs on :8080
 # 4) Issue yourself an API key (printed once)
 make apikey-dev
 ```
+
+Your own instance needs no permission from anyone. For a key to a **hosted**
+instance, open an [API key request](https://github.com/LWSNLab/CareGraph/issues/new/choose) —
+keys are issued by hand, so it takes a few days.
 
 Smoke test — `/healthz` is public, everything under `/v1` needs the key:
 

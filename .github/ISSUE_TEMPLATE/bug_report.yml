@@ -1,0 +1,75 @@
+name: Bug report
+description: Something behaves differently than documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems do not belong here — report them
+        [privately](https://github.com/LWSNLab/CareGraph/security/advisories/new).
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        A request, a command, or the steps that get there. Keep your API key out
+        of it — the id half is public, the secret half is not.
+      placeholder: |
+        curl -H "X-API-Key: $CAREGRAPH_API_KEY" \
+          'localhost:8080/v1/infrastructure/near?lat=52.52&lng=13.405&radius_km=5'
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >
+        From `GET /openapi.yaml` (`info.version`), the release tag, or the commit.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Go API
+        - Python ingestion pipelines
+        - Database / migrations
+        - Deployment (compose, Caddy, CI)
+        - The dataset itself
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how
+    attributes:
+      label: How are you running it
+      options:
+        - Own instance, from source
+        - Own instance, containers
+        - A hosted instance
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        The API logs JSON. `/readyz` reports which dependencies it can reach —
+        its output is often the fastest answer.
+      render: shell
