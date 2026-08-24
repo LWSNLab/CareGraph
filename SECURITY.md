@@ -64,10 +64,13 @@ Two areas nevertheless deserve careful reports:
 
 - **Location privacy.** Radius queries can expose a user's whereabouts, and every
   access-log record carries `client_ip` — so a logged query string would file an
-  address together with a location. `lat` and `lng` are therefore redacted before
-  anything is written, in the access log and in the two handler error paths;
-  parameter names and the radius survive, the point does not. A test sends a real
-  radius request and fails if either coordinate appears in the output. See
+  address together with a location. Query values are therefore redacted before
+  anything is written, in the access log and in both handler error paths. It is
+  an **allowlist**: only `radius_km`, `limit` and `type` keep their values, so a
+  parameter added later is redacted by default rather than logged until somebody
+  notices. Search terms and place names are redacted too — a caller's interest is
+  as personal as their position. A test sends a real radius request and fails if
+  either coordinate appears in the output. See
   [Security & Privacy](https://github.com/LWSNLab/CareGraph_Doc/blob/main/docs/architecture/security.md).
   A leak of precise coordinates into logs or responses **is** a valid finding.
 - **Sole traders.** Some care providers are natural persons, so their published

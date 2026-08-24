@@ -166,6 +166,7 @@ func run() int {
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
 	// SIGTERM is what an orchestrator sends on deploy, scale-down and rollback.
