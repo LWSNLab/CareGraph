@@ -51,8 +51,13 @@ set-version: ## Set the release version everywhere (VERSION=1.2.3)
 	@echo "$(VERSION)" > VERSION
 	@perl -pi -e 's/^version = ".*"/version = "$(VERSION)"/ if $$. < 10' pipelines/pyproject.toml
 	@perl -pi -e 's/^  version: .*/  version: $(VERSION)/ if $$. < 30' api/openapi.yaml
+	# uv.lock records the project's own version, so editing pyproject.toml alone
+	# leaves the two disagreeing — and every `uv sync --locked` then refuses,
+	# which is CI and the ingestion image build. Nothing caught this at 0.1.0
+	# because the version had never moved.
+	@cd pipelines && uv lock --quiet
 	@go test ./api/ -run 'Version|Changelog' >/dev/null \
-		&& echo "version $(VERSION) set in VERSION, pyproject.toml and openapi.yaml"
+		&& echo "version $(VERSION) set in VERSION, pyproject.toml, openapi.yaml and uv.lock"
 	@echo "now add a ## [$(VERSION)] section to CHANGELOG.md, then merge to main"
 
 dataset-release: ## Export the dataset and attach it to a release (TAG=v0.1.0, default: latest)
