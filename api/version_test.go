@@ -22,6 +22,16 @@ func TestVersionsAgree(t *testing.T) {
 		t.Errorf("pipelines/pyproject.toml version = %q, VERSION says %q — run `make set-version VERSION=%s`",
 			got, want, want)
 	}
+
+	// The lockfile records the project's own version too, and it is the copy
+	// that bites: `uv sync --locked` refuses a lock that disagrees with its
+	// pyproject, which is CI and the ingestion image build. This test existed to
+	// stop a half-applied bump from shipping and did not look here, so 0.1.1
+	// broke both — the first bump this project ever made.
+	if got := lockfileVersion(t); got != want {
+		t.Errorf("pipelines/uv.lock records version %q, VERSION says %q — run `make set-version VERSION=%s`",
+			got, want, want)
+	}
 }
 
 func TestTheVersionHasAChangelogEntry(t *testing.T) {
@@ -78,6 +88,22 @@ func readVersion(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// The lock lists every dependency as well, so the version is read from the
+// `caregraph-pipelines` entry rather than from the first one that matches.
+func lockfileVersion(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../pipelines/uv.lock")
+	if err != nil {
+		t.Fatalf("read uv.lock: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^name\s*=\s*"caregraph-pipelines"\s*\nversion\s*=\s*"([^"]+)"`).
+		FindSubmatch(b)
+	if m == nil {
+		t.Fatal("no caregraph-pipelines entry in pipelines/uv.lock")
+	}
+	return string(m[1])
 }
 
 func pyprojectVersion(t *testing.T) string {
