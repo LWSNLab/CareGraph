@@ -109,7 +109,7 @@ func (h *Handler) Search(c *gin.Context) {
 func (h *Handler) respondSearchErr(c *gin.Context, err error) {
 	ctx := c.Request.Context()
 	log := httpx.Logger(h.log, c).With(
-		"path", c.Request.URL.Path,
+		"path", httpx.SafePath(c.Request.URL.Path),
 		"query", httpx.RedactQuery(c.Request.URL.RawQuery),
 		"error", err)
 
@@ -165,7 +165,7 @@ func (h *Handler) respondRepoErr(c *gin.Context, err error) {
 	ctx := c.Request.Context()
 	log := httpx.Logger(h.log, c).With(
 		"method", c.Request.Method,
-		"path", c.Request.URL.Path,
+		"path", httpx.SafePath(c.Request.URL.Path),
 		"query", httpx.RedactQuery(c.Request.URL.RawQuery),
 		"error", err,
 	)

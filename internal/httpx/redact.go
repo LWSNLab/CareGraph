@@ -3,6 +3,7 @@ package httpx
 import (
 	"net/url"
 	"strings"
+	"unicode/utf8"
 )
 
 // Query parameters whose values may appear in a log — listed, rather than the
@@ -36,8 +37,11 @@ const (
 
 	// The result is bounded too, because parameter *names* come from the caller
 	// as well and survive redaction. Encode percent-encodes non-ASCII, so the
-	// output is ASCII and cutting on a byte boundary cannot split a rune.
+	// output is ASCII and cutting on a byte boundary cannot split a rune. A path
+	// can hold real UTF-8, so SafePath cuts on a rune boundary instead.
 	maxLoggedBytes = 512
+
+	truncationMark = "…[truncated]"
 )
 
 // RedactQuery returns the query as it may be logged: every value replaced unless
@@ -72,7 +76,60 @@ func RedactQuery(raw string) string {
 
 	encoded := values.Encode()
 	if len(encoded) > maxLoggedBytes {
-		return encoded[:maxLoggedBytes] + "…[truncated]"
+		return encoded[:maxLoggedBytes] + truncationMark
 	}
 	return encoded
 }
+
+// SafePath returns a request path as it may be logged: bounded, with control
+// characters percent-encoded.
+//
+// Unlike a query, a path really can carry them — `/a%0Ab` decodes to a newline
+// in URL.Path, while url.Values.Encode hands a query back already escaped. The
+// JSON handler escapes both, so this is not what prevents a forged record; it
+// keeps the guarantee true for any sink that is not JSON, and it bounds a path
+// that a caller may otherwise stretch to the header limit.
+//
+// Encoded rather than stripped. Deleting the characters maps two different paths
+// onto one string, which is precisely how a forged path stops being
+// distinguishable from a real one in a search.
+// The budget is spent while encoding rather than by cutting first: escaping a
+// control byte turns one byte into three, so a path trimmed to the cap and
+// encoded afterwards comes back over it. FuzzSafePath found exactly that, at 528
+// bytes against a cap of 526.
+func SafePath(raw string) string {
+	// Almost every real path takes this branch: two cheap scans and no allocation.
+	if len(raw) <= maxLoggedBytes &&
+		strings.IndexFunc(raw, isControl) < 0 && utf8.ValidString(raw) {
+		return raw
+	}
+
+	var b strings.Builder
+	b.Grow(min(len(raw), maxLoggedBytes) + len(truncationMark))
+
+	// Ranging by rune keeps multi-byte characters whole; invalid bytes arrive as
+	// utf8.RuneError, so the result is valid UTF-8 whatever came in.
+	for _, r := range raw {
+		width := utf8.RuneLen(r)
+		if isControl(r) {
+			width = 3
+		}
+		if b.Len()+width > maxLoggedBytes {
+			b.WriteString(truncationMark)
+			return b.String()
+		}
+		if isControl(r) {
+			b.WriteByte('%')
+			b.WriteByte(upperHex[byte(r)>>4])
+			b.WriteByte(upperHex[byte(r)&0x0f])
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// Multi-byte runes are untouched: every byte of one is >= 0x80.
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
+
+const upperHex = "0123456789ABCDEF"

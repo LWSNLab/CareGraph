@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 )
@@ -73,6 +74,33 @@ func TestRedactQueryIsBounded(t *testing.T) {
 	}
 }
 
+func TestSafePath(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"an ordinary path is untouched",
+			"/v1/infrastructure/near", "/v1/infrastructure/near"},
+		// url.Parse decodes %0A into a real newline, so a path — unlike a query —
+		// reaches the logger with control characters still in it.
+		{"a decoded newline is encoded again", "/v1/a\nb", "/v1/a%0Ab"},
+		{"so is an ANSI escape, which a terminal would otherwise obey",
+			"/v1/\x1b[2J", "/v1/%1B[2J"},
+		{"and DEL", "/v1/\x7f", "/v1/%7F"},
+		{"UTF-8 survives, because only bytes below 0x20 are touched",
+			"/v1/Münster", "/v1/Münster"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SafePath(tc.in); got != tc.want {
+				t.Fatalf("SafePath(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 // Properties that must hold for any input at all, rather than for the cases
 // somebody thought of.
 //
@@ -123,6 +151,37 @@ func FuzzRedactQuery(f *testing.F) {
 					t.Fatalf("%q kept the value %q, from input %q", name, v, raw)
 				}
 			}
+		}
+	})
+}
+
+// The same two properties for paths, which carry real control characters where a
+// query carries their escaped form. A review suggested deleting them; this
+// asserts that they are encoded instead, so two paths that differ still differ
+// in the log — a deletion would map them onto one string and make a forged path
+// indistinguishable from a real one in a search.
+func FuzzSafePath(f *testing.F) {
+	for _, seed := range []string{
+		"", "/v1/infrastructure/near", "/v1/a\nb", "/v1/\x1b[2J\x7f",
+		"/v1/Münster", "/" + strings.Repeat("ä", 400),
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		got := SafePath(raw)
+
+		for i := 0; i < len(got); i++ {
+			if got[i] < 0x20 || got[i] == 0x7f {
+				t.Fatalf("control byte %#02x survived: %q", got[i], got)
+			}
+		}
+		if cap := maxLoggedBytes + len(truncationMark); len(got) > cap {
+			t.Fatalf("result is %d bytes, cap is %d", len(got), cap)
+		}
+		// The cut lands on a rune boundary, so valid input stays valid.
+		if utf8.ValidString(raw) && !utf8.ValidString(got) {
+			t.Fatalf("valid UTF-8 in, invalid out: %q", got)
 		}
 	})
 }

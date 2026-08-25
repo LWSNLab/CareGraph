@@ -82,7 +82,7 @@ Two areas nevertheless deserve careful reports:
 | Area | Measure |
 | :-- | :-- |
 | Static analysis | CodeQL (`security-extended` queries), Go `vet` |
-| Logging | Structured JSON, which escapes every attribute value — a caller cannot forge a record through a newline. CodeQL's log-injection query reports those call sites regardless, because it does not model the handler; the alerts are dismissed as false positives and a test fails if the handler ever stops being JSON |
+| Logging | Structured JSON, which escapes every attribute value — a caller cannot forge a record through a newline. CodeQL's log-injection query reports those call sites regardless, because it does not model the handler; the alerts are dismissed as false positives and a test fails if the handler ever stops being JSON. Paths and queries are additionally bounded and percent-encoded before they are written, so the guarantee holds for any sink that is not JSON |
 | Dependencies | Dependabot alerts and grouped update PRs; `govulncheck` (Go), `pip-audit` (Python) |
 | Secrets | `gitleaks` over the full history on every push and pull request |
 | Database | Least-privilege roles — write-scoped ingestion, read-only gateway; row-level security on managed Postgres |
