@@ -62,6 +62,19 @@ jobs:
       # The image has no shell, so this also proves the -healthcheck flag works:
       # with nothing listening it must exit non-zero. A healthcheck that always
       # succeeded would mark a broken container healthy.
+      # Issuing keys is the one routine operator task on a server, and every /v1
+      # route needs one. The tool lived only in the source tree until this image
+      # carried it, which left a deployment nobody could use without installing
+      # Go beside it — so its presence is asserted rather than assumed.
+      - name: The API image can issue keys
+        run: |
+          set -euo pipefail
+          out=$(docker run --rm --entrypoint /apikey caregraph-api:ci 2>&1 || true)
+          case "$out" in
+            *"usage: apikey"*) ;;
+            *) echo "::error::/apikey missing or not runnable: $out"; exit 1 ;;
+          esac
+
       - name: The API healthcheck fails when nothing is listening
         run: |
           set -euo pipefail
