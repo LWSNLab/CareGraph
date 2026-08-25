@@ -164,6 +164,13 @@ func FuzzSafePath(f *testing.F) {
 	for _, seed := range []string{
 		"", "/v1/infrastructure/near", "/v1/a\nb", "/v1/\x1b[2J\x7f",
 		"/v1/Münster", "/" + strings.Repeat("ä", 400),
+		// A control character landing exactly on the cut, which is the only place
+		// it can push the result over the cap: budgeted as one byte but written as
+		// three. The first implementation got this wrong across the whole string —
+		// it trimmed first and escaped afterwards — and fuzzing found it at 528
+		// bytes against a cap of 526. Anywhere earlier in the path the mistake is
+		// invisible, because the loop measures what it has already written.
+		strings.Repeat("a", maxLoggedBytes-2) + "\x00" + "aaaa",
 	} {
 		f.Add(seed)
 	}
