@@ -8,8 +8,15 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /out/api ./cmd/api
 
+# Issuing and listing API keys is the one routine operator task on a server, and
+# every /v1 route needs a key — so an image without this leaves a deployment that
+# nobody can use unless a Go toolchain is installed alongside it, which is exactly
+# what this image exists to avoid. Reached with `--entrypoint /apikey`.
+RUN CGO_ENABLED=0 go build -trimpath -o /out/apikey ./cmd/apikey
+
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/api /api
+COPY --from=build /out/apikey /apikey
 EXPOSE 8080
 USER nonroot:nonroot
 
