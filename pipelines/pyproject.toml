@@ -1,0 +1,44 @@
+[project]
+name = "caregraph-pipelines"
+version = "0.1.0"
+description = "CareGraph ingestion pipelines: web scraping, PDF parsing, and geocoding."
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=3.0.5",
+    "pdfplumber>=0.11.10",
+    "beautifulsoup4>=4.15.0",
+    "requests>=2.34.2",
+    "psycopg[binary]>=3.3.4",
+    # Lets requests verify against the OS trust store instead of certifi's
+    # bundle. Needed wherever a TLS-inspecting proxy re-signs traffic with a
+    # root that IT installed in the OS store — see pipelines/common/trust.py.
+    "truststore>=0.10.4",
+]
+
+[dependency-groups]
+dev = ["pytest>=9.1.1", "ruff>=0.16.3"]
+
+# Treat this as an application (managed deps + venv), not an installable package.
+# Avoids a build backend and its packaging requirements.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Explicit ruleset so CI and local runs agree regardless of the environment.
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # bugbear
+]
+# Scrapers deliberately swallow every network/parse error and carry on; the
+# run report is what surfaces failures, not an exception per element.
+ignore = ["B904"]

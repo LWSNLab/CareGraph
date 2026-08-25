@@ -1,0 +1,48 @@
+# Go
+/bin/
+/out/
+# `/api` used to be here, for a binary dropped by a bare `go build -o api`. It
+# also matched the api/ directory — a gitignore pattern cannot tell the two
+# apart — so the OpenAPI contract and its tests were silently untracked.
+#
+# Now that api/ exists, `go build -o api` writes *into* it instead, so the
+# 28 MB binary lands next to the contract. That specific path is what needs
+# ignoring; the directory itself must stay tracked.
+/api/api
+*.exe
+*.test
+*.out
+
+# Env / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+pipelines/.venv/
+
+# pipelines/uv.lock is deliberately NOT ignored. It was, and that was wrong on
+# two counts: every build resolved dependencies afresh, so "runs reproducibly
+# anywhere" (E4-S1) was not true — and Dockerfile.ingest copies the lockfile to
+# install with `uv sync --locked`, which fails on a clean checkout when the file
+# is not in the repository. Verified: the ingestion image would not build in CI.
+
+# Pipeline data (raw downloads & generated outputs; overrides ARE tracked)
+#
+# Everything downloaded from a source stays out of git, whatever its extension.
+# The previous `*.pdf` rule only covered the GKV list, so a 5.4 MB
+# Bundes-Klinik-Atlas export sat here untracked but not ignored — one `git add -A`
+# from entering the history of a repository that is heading for public. Raw
+# downloads also age; a file in git is a snapshot nobody re-fetches.
+pipelines/data/raw/*
+!pipelines/data/raw/.gitkeep
+pipelines/data/processed/
+
+# OS / IDE
+.DS_Store
+.idea/
+
+# pip-audit export (CI artifact)
+pipelines/requirements-audit.txt
+dist/

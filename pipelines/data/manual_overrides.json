@@ -1,0 +1,27 @@
+{
+  "bkk-miele.de": {
+    "strasse": "Carl-Miele-Str. 214",
+    "plz": "33335",
+    "ort": "Gütersloh"
+  },
+  "bkk-deutsche-bank.de": {
+    "strasse": "Taunusanlage 12",
+    "plz": "60325",
+    "ort": "Frankfurt am Main"
+  },
+  "bkk-wuerth.de": {
+    "strasse": "Triebweg 45",
+    "plz": "74653",
+    "ort": "Künzelsau"
+  },
+  "bmwbkk.de": {
+    "strasse": "Mengkofener Str. 6",
+    "plz": "84130",
+    "ort": "Dingolfing"
+  },
+  "bkk-krones.de": {
+    "strasse": "Böhmerwaldstraße 5",
+    "plz": "93073",
+    "ort": "Neutraubling"
+  }
+}

@@ -1,0 +1,77 @@
+# Production overlay, never used on its own:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     --profile app --profile edge up -d
+#
+# Caddy terminates TLS, nothing else is published, everything restarts after a
+# reboot, and the API believes X-Forwarded-For from this network only.
+
+services:
+  caddy:
+    profiles: ["edge"]
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      CAREGRAPH_DOMAIN: ${CAREGRAPH_DOMAIN:?set CAREGRAPH_DOMAIN to the public hostname}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL for Let's Encrypt expiry notices}
+      CADDY_GLOBAL_EXTRA: ${CADDY_GLOBAL_EXTRA:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account keys. Losing this means re-issuing on every
+      # restart, and Let's Encrypt rate-limits that to five per week.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [internal]
+
+  api:
+    restart: unless-stopped
+    # Pulled from GHCR, not built here: the image CI tested is the image that
+    # runs. `build:` is inherited from the base file and only used with --build,
+    # which is the fallback when there is no registry access.
+    image: ${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}/caregraph-api:${CAREGRAPH_TAG:-latest}
+    ports: !override
+      # Loopback only — publishing it would let anyone bypass TLS. Still
+      # published so an operator can curl it on the box.
+      - "127.0.0.1:${CAREGRAPH_PORT:-8080}:8080"
+    environment:
+      # The subnet below, and nothing wider: too narrow and every client shares
+      # one rate-limit bucket, too wide and a client can forge its own address.
+      CAREGRAPH_TRUSTED_PROXIES: ${CAREGRAPH_TRUSTED_PROXIES:-172.28.0.0/16}
+
+  db:
+    restart: unless-stopped
+    ports: !override
+      # Loopback only, not removed entirely: `make apikeys` runs the Go CLI on
+      # the host, and issuing a key is the one routine operator task. Unreachable
+      # from off the machine either way.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+
+  ingest:
+    image: ${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}/caregraph-ingest:${CAREGRAPH_TAG:-latest}
+
+  redis:
+    restart: unless-stopped
+    ports: !override []
+
+  typesense:
+    restart: unless-stopped
+    ports: !override []
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    ipam:
+      config:
+        # Fixed, so CAREGRAPH_TRUSTED_PROXIES names exactly this network rather
+        # than a broad private range.
+        - subnet: 172.28.0.0/16

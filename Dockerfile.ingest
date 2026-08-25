@@ -1,0 +1,68 @@
+# Ingestion pipelines (Python). A batch job, not a service:
+# `docker compose run --rm ingest -m pipelines.run_dataset export`.
+#
+# Debian slim rather than Alpine because the pipelines verify TLS against the OS
+# trust store (pipelines/common/trust.py) and Alpine ships without
+# ca-certificates. That failure is quiet — the code falls back to certifi with a
+# warning and loses only its tolerance for TLS-inspecting proxies — so the store
+# is asserted at build time below.
+
+FROM python:3.12-slim-bookworm AS build
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+WORKDIR /app
+
+# Dependencies before source, so this layer survives an edit to a parser.
+COPY pipelines/pyproject.toml pipelines/uv.lock ./pipelines/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    cd pipelines && uv sync --locked --no-dev --no-install-project
+
+COPY pipelines/ ./pipelines/
+
+# Not for executing: `dataset export` stamps the newest filename into
+# MANIFEST.json and `dataset import` checks it against the schema it finds.
+COPY db/migrations/ ./db/migrations/
+
+# --- runtime ----------------------------------------------------------------
+
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fails the build if a base-image change ever drops the trust store, rather than
+# leaving it to be diagnosed as "the source is down" in a quarterly run.
+RUN set -eu; \
+    bundle=$(grep -c 'BEGIN CERTIFICATE' /etc/ssl/certs/ca-certificates.crt || echo 0); \
+    echo "OS trust store: ${bundle} certificates"; \
+    if [ "$bundle" -lt 100 ]; then \
+        echo "ERROR: trust store empty or tiny — verification would fall back to certifi" >&2; \
+        exit 1; \
+    fi
+
+# /app must be owned by ingest as a directory, not just its contents: runners
+# write to paths relative to the working directory. Ownership is set here and by
+# COPY --chown, never by a `chown -R`, which would duplicate the whole tree into
+# a second layer (604 MB against 377 MB).
+RUN useradd --system --create-home --uid 10001 ingest \
+    && install -d -o ingest -g ingest /app
+
+WORKDIR /app
+COPY --from=build --chown=ingest:ingest /app /app
+
+ENV PATH="/app/pipelines/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Unprivileged: this code parses input from the open internet.
+USER ingest
+
+# The runners are separate commands, selected per invocation.
+ENTRYPOINT ["python"]
+CMD ["-c", "import sys; print('specify a runner, e.g. -m pipelines.run_load providers'); sys.exit(2)"]

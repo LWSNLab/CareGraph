@@ -1,0 +1,25 @@
+# Build context for the ingestion image. BuildKit prefers this over the shared
+# .dockerignore, which excludes pipelines/ to keep it out of the Go API image.
+.git
+.idea
+.env
+**/__pycache__
+**/.venv
+**/.ruff_cache
+**/.pytest_cache
+
+pipelines/tests
+docs
+*.md
+
+cmd
+internal
+api
+dist
+
+# Hundreds of megabytes of PDFs and XML a pipeline re-fetches when it needs them.
+pipelines/data
+
+# db/ is deliberately absent from this list: `dataset export` reads the newest
+# migration filename to stamp MANIFEST.json, and `dataset import` compares it.
+# Excluding it stamped "unknown", making container-made archives unimportable.

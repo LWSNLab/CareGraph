@@ -1,0 +1,207 @@
+name: CI
+
+# Build, lint and test on every change. Pulled forward from story E4-S2 so the
+# test suite actually guards the repo; image builds and deployment remain part
+# of E4-S2 and are NOT covered here.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch: {}
+  # Callable, so the release workflow can gate on it instead of racing it.
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+# A newer push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (build · vet · test)
+    runs-on: ubuntu-latest
+
+    # PostGIS for the repository's integration tests, Redis for the rate
+    # limiter's. Without them those tests skip, leaving the ST_DWithin query and
+    # the token-bucket Lua script — the two parts most likely to break — untested.
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: caregraph
+          POSTGRES_PASSWORD: caregraph
+          POSTGRES_DB: caregraph
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U caregraph -d caregraph"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      CAREGRAPH_TEST_DSN: postgres://caregraph:caregraph@localhost:5432/caregraph?sslmode=disable
+      CAREGRAPH_TEST_REDIS: localhost:6379
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      # A service container does not run docker-entrypoint-initdb.d, so the
+      # migrations have to be applied explicitly here.
+      # Applied twice on purpose. `deploy/update.sh` re-applies every migration on
+      # every update, because the compose mount only runs them on an empty volume
+      # — so a migration that cannot be re-run would break a production update.
+      # Today they all can, but by nature rather than by design.
+      - name: Apply database migrations, twice
+        env:
+          PGPASSWORD: caregraph
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            echo "::group::migrations, pass $pass"
+            for migration in db/migrations/*.sql; do
+              echo "applying $migration"
+              psql -h localhost -U caregraph -d caregraph -v ON_ERROR_STOP=1 -f "$migration"
+            done
+            echo "::endgroup::"
+          done
+
+      - name: Verify formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed for:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  python:
+    name: Python pipelines (lint · test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pipelines
+
+    # PostGIS for the loader's integration tests. Without it they skip, which
+    # would leave the database code effectively untested in CI.
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: caregraph
+          POSTGRES_PASSWORD: caregraph
+          POSTGRES_DB: caregraph
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U caregraph -d caregraph"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      typesense:
+        image: typesense/typesense:0.25.2
+        env:
+          TYPESENSE_API_KEY: devkey
+          TYPESENSE_DATA_DIR: /tmp
+        ports:
+          - 8108:8108
+
+    env:
+      CAREGRAPH_TEST_DSN: postgres://caregraph:caregraph@localhost:5432/caregraph?sslmode=disable
+      CAREGRAPH_TEST_TYPESENSE: http://localhost:8108
+      CAREGRAPH_TEST_TYPESENSE_KEY: devkey
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "pipelines/pyproject.toml"
+
+      # --locked, not a bare sync: it fails when uv.lock does not match
+      # pyproject.toml, so a dependency change without a lockfile update is
+      # caught here rather than in an image build that installs from the lock.
+      - name: Install dependencies
+        run: uv sync --all-groups --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      # A service container does not run docker-entrypoint-initdb.d, so the
+      # migrations have to be applied explicitly here.
+      - name: Apply database migrations
+        working-directory: ${{ github.workspace }}
+        env:
+          PGPASSWORD: caregraph
+        run: |
+          set -euo pipefail
+          for migration in db/migrations/*.sql; do
+            echo "applying $migration"
+            psql -h localhost -U caregraph -d caregraph -v ON_ERROR_STOP=1 -f "$migration"
+          done
+
+      # The service container has no health check of its own, and the search
+      # tests skip when Typesense is unreachable — so without this they would
+      # quietly not run rather than fail.
+      - name: Wait for Typesense
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if curl -fsS http://localhost:8108/health >/dev/null; then
+              echo "typesense ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Typesense did not become ready"; exit 1
+
+      - name: Test
+        # Run from the repo root so `pipelines` imports as a package.
+        # Tests needing the (gitignored) GKV PDF skip themselves.
+        working-directory: ${{ github.workspace }}
+        run: uv run --project pipelines pytest pipelines/tests -q
+
+      # The release artefact is only useful if it round-trips. Building it in CI
+      # proves the export works against a schema built purely from migrations,
+      # which is the situation a self-hoster is in.
+      - name: Dataset export/import round trip
+        working-directory: ${{ github.workspace }}
+        env:
+          INGEST_DATABASE_URL: postgres://caregraph:caregraph@localhost:5432/caregraph?sslmode=disable
+        run: |
+          set -euo pipefail
+          uv run --project pipelines python -m pipelines.run_load providers \
+            --input pipelines/tests/fixtures/providers_sample.json
+          uv run --project pipelines python -m pipelines.run_dataset export \
+            --out /tmp/dataset.tar.gz
+          uv run --project pipelines python -m pipelines.run_dataset import \
+            --file /tmp/dataset.tar.gz

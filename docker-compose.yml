@@ -1,0 +1,131 @@
+name: caregraph
+
+# Local development stack. Infra (db, typesense, redis) starts by default;
+# the Go API is behind the "app" profile so `docker compose up` works before
+# the Go build is wired (run `make tidy` first, then `--profile app`).
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-caregraph}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-caregraph}
+      POSTGRES_DB: ${POSTGRES_DB:-caregraph}
+    ports:
+      # 5432 is often taken by a local Postgres install; override with POSTGRES_PORT.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      # *.sql here run automatically on first initialization of an empty volume.
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-caregraph} -d ${POSTGRES_DB:-caregraph}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  typesense:
+    image: typesense/typesense:0.25.2
+    command: ["--data-dir", "/data", "--api-key", "${TYPESENSE_API_KEY:-devkey}", "--enable-cors"]
+    # Loopback only, like redis: the dev key is `devkey`, so publishing this on
+    # 0.0.0.0 would hand write access to the index to the local network. The API
+    # reaches it over the `internal` network; this mapping is for running the
+    # sync worker and the gateway outside compose.
+    ports:
+      - "127.0.0.1:${TYPESENSE_PORT:-8108}:8108"
+    # bash is the only thing in this image that can reach a socket — no curl,
+    # wget, nc or python3 — hence /dev/tcp. Greps the body rather than just
+    # checking that the port accepts, which would report healthy while Typesense
+    # was still loading its index.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/8108 && printf "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q ''"ok":true'' <&3'
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - typesense_data:/data
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    # Bound to the loopback interface on purpose: this Redis has no password, so
+    # publishing it on 0.0.0.0 would hand the rate-limit state to anyone on the
+    # local network. The API reaches it over the `internal` network either way;
+    # the mapping exists only for running the Go gateway outside compose.
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  api:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      CAREGRAPH_HTTP_ADDR: ":8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-caregraph}:${POSTGRES_PASSWORD:-caregraph}@db:5432/${POSTGRES_DB:-caregraph}?sslmode=disable
+      TYPESENSE_URL: http://typesense:8108
+      TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-devkey}
+      REDIS_ADDR: redis:6379
+      # `db` is not loopback, and from inside a container a private bridge
+      # network is indistinguishable from the open internet. This asserts "one
+      # host". A deployment spanning machines must drop it and use sslmode=require.
+      CAREGRAPH_ALLOW_INSECURE_DB: "1"
+    ports:
+      - "${CAREGRAPH_PORT:-8080}:8080"
+    # No healthcheck here: the image declares its own, so there is one definition.
+    # stop_grace_period exceeds the API's 20 s drain, or SIGKILL would cut it off.
+    stop_grace_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      typesense:
+        # healthy, not started: /search answers 503 until the index is loaded.
+        condition: service_healthy
+    networks: [internal]
+
+  # Ingestion pipelines — a batch job, so invoked with `run`, never `up`:
+  #   docker compose --profile ingest run --rm ingest -m pipelines.run_dataset export
+  ingest:
+    profiles: ["ingest"]
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    environment:
+      # Owner rather than the write-scoped role: `caregraph_ingest` has no
+      # password until `make db-roles-dev` runs, which compose cannot depend on.
+      INGEST_DATABASE_URL: postgres://${POSTGRES_USER:-caregraph}:${POSTGRES_PASSWORD:-caregraph}@db:5432/${POSTGRES_DB:-caregraph}?sslmode=disable
+      TYPESENSE_URL: http://typesense:8108
+      TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-devkey}
+      CAREGRAPH_ALLOW_INSECURE_DB: "1"  # see the api service above
+    volumes:
+      # Inputs and outputs stay on the host; neither belongs in the image.
+      - ./pipelines/data:/app/pipelines/data
+      - ./dist:/app/dist
+    depends_on:
+      db:
+        condition: service_healthy
+      typesense:
+        condition: service_healthy
+    networks: [internal]
+
+volumes:
+  db_data:
+  typesense_data:
+
+networks:
+  internal:
+    driver: bridge
