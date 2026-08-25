@@ -1,6 +1,6 @@
 [project]
 name = "caregraph-pipelines"
-version = "0.1.0"
+version = "0.1.1"
 description = "CareGraph ingestion pipelines: web scraping, PDF parsing, and geocoding."
 requires-python = ">=3.12"
 dependencies = [

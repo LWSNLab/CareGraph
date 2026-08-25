@@ -6,7 +6,13 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    # `main` is deliberately absent. A push there is a release, and the release
+    # workflow calls this one itself — so a push trigger would start a second,
+    # identical run on the same ref. Both land in the concurrency group below,
+    # one cancels the other, and every release leaves a "cancelled" CI beside its
+    # green checks. Nothing is lost by removing it: the release gates on this
+    # workflow, and pull requests into `main` still run it directly.
+    branches: [develop]
   pull_request:
     branches: [main, develop]
   workflow_dispatch: {}

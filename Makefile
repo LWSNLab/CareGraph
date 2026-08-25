@@ -1,5 +1,10 @@
 .PHONY: help up down stack images logs ps migrate tidy api fmt pipelines env-prod db-roles backup restore set-version dataset-release
 
+# Containerised targets build from this checkout by default. CAREGRAPH_PROD=1
+# adds the production overlay, where every application service names a published
+# image instead.
+COMPOSE_INGEST := docker compose $(if $(CAREGRAPH_PROD),-f docker-compose.yml -f docker-compose.prod.yml )--profile ingest
+
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_%-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
@@ -18,9 +23,15 @@ images: ## Build both images without starting anything
 # Containerised ingestion. The same runners as the host targets above, in the
 # image a deployment uses — which is the point: a self-hoster with neither Go
 # nor uv installed can still load data and cut a dataset.
-ingest-%: ## Run a pipeline in the ingest container, e.g. make ingest-dataset ARGS="export"
+#
+# CAREGRAPH_PROD=1 adds the overlay, which swaps the locally built image for the
+# published one and pulls it first. Without it a server would build its own copy
+# of an image CI has already built and tested — the one thing a registry exists
+# to prevent, and a copy nobody has run the test suite against.
+ingest-%: ## Run a pipeline in the ingest container (CAREGRAPH_PROD=1 uses the published image)
 	@test -n "$(ARGS)" || (echo 'usage: make ingest-dataset ARGS="export --out /app/dist/x.tar.gz"' && exit 1)
-	docker compose --profile ingest run --rm ingest -m pipelines.run_$* $(ARGS)
+	@$(if $(CAREGRAPH_PROD),$(COMPOSE_INGEST) pull -q ingest,true)
+	$(COMPOSE_INGEST) run --rm ingest -m pipelines.run_$* $(ARGS)
 
 logs: ## Tail container logs
 	docker compose logs -f
@@ -40,8 +51,13 @@ set-version: ## Set the release version everywhere (VERSION=1.2.3)
 	@echo "$(VERSION)" > VERSION
 	@perl -pi -e 's/^version = ".*"/version = "$(VERSION)"/ if $$. < 10' pipelines/pyproject.toml
 	@perl -pi -e 's/^  version: .*/  version: $(VERSION)/ if $$. < 30' api/openapi.yaml
+	# uv.lock records the project's own version, so editing pyproject.toml alone
+	# leaves the two disagreeing — and every `uv sync --locked` then refuses,
+	# which is CI and the ingestion image build. Nothing caught this at 0.1.0
+	# because the version had never moved.
+	@cd pipelines && uv lock --quiet
 	@go test ./api/ -run 'Version|Changelog' >/dev/null \
-		&& echo "version $(VERSION) set in VERSION, pyproject.toml and openapi.yaml"
+		&& echo "version $(VERSION) set in VERSION, pyproject.toml, openapi.yaml and uv.lock"
 	@echo "now add a ## [$(VERSION)] section to CHANGELOG.md, then merge to main"
 
 dataset-release: ## Export the dataset and attach it to a release (TAG=v0.1.0, default: latest)

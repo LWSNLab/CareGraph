@@ -108,26 +108,51 @@ curl https://api.caregraph.de/readyz
 
 ## 6. Data
 
-The database is empty until you load it. From the published archive:
+The database is empty until you load it. Put the archive in `dist/` — the
+directory is mounted into the container — and import it:
 
 ```bash
-make dataset-import FILE=dist/caregraph-providers-YYYY-MM-DD.tar.gz
-make search-sync
+make ingest-dataset CAREGRAPH_PROD=1 ARGS="import --file /app/dist/caregraph-providers-YYYY-MM-DD.tar.gz"
 ```
 
+```bash
+make ingest-search CAREGRAPH_PROD=1 ARGS="sync"
+```
+
+`CAREGRAPH_PROD=1` is what makes these pull the published image rather than
+build one here. Without it the server compiles its own copy of an image CI has
+already built and tested, and the paths above are the container's, not the
+host's.
+
+The plain `make dataset-import` and `make search-sync` do the same work through
+`uv` on the host. They are the development path — this machine has no Python
+toolchain, and does not need one.
+
 The archive contains care providers only. Insurers need the GKV list PDF
-(`make load-insurers`), hospitals the Bundes-Klinik-Atlas export — and until the
-Standortverzeichnis answers the redistribution question, hospitals should not go
-into anything published.
+(`ARGS="insurers"` through `make ingest-load`), hospitals the Bundes-Klinik-Atlas
+export — and until the Standortverzeichnis answers the redistribution question,
+hospitals should not go into anything published.
 
 ## 7. A key
 
+Every `/v1` route needs one, so this is the step that makes the deployment
+usable. The tool ships inside the API image, reached by replacing the entrypoint:
+
 ```bash
-make apikey-dev            # or: go run ./cmd/apikey issue --name "Someone" --tier community
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app \
+  run --rm --entrypoint /apikey api issue --name "Someone" --tier community
+```
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app \
+  run --rm --entrypoint /apikey api list
 ```
 
 Printed once and stored only as an Argon2id hash. There is no recovery — a lost
 key is revoked and reissued.
+
+`make apikey-dev` and `make apikeys` do the same through `go run`. They are the
+development path and need a Go toolchain, which this machine does not have.
 
 ## 8. Backups
 
