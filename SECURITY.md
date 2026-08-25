@@ -62,8 +62,15 @@ statutory insurers). It holds **no patient data and no personal health records**
 
 Two areas nevertheless deserve careful reports:
 
-- **Location privacy.** Radius queries can expose a user's whereabouts. The
-  gateway must not log exact coordinates; see
+- **Location privacy.** Radius queries can expose a user's whereabouts, and every
+  access-log record carries `client_ip` — so a logged query string would file an
+  address together with a location. Query values are therefore redacted before
+  anything is written, in the access log and in both handler error paths. It is
+  an **allowlist**: only `radius_km`, `limit` and `type` keep their values, so a
+  parameter added later is redacted by default rather than logged until somebody
+  notices. Search terms and place names are redacted too — a caller's interest is
+  as personal as their position. A test sends a real radius request and fails if
+  either coordinate appears in the output. See
   [Security & Privacy](https://github.com/LWSNLab/CareGraph_Doc/blob/main/docs/architecture/security.md).
   A leak of precise coordinates into logs or responses **is** a valid finding.
 - **Sole traders.** Some care providers are natural persons, so their published
@@ -75,6 +82,7 @@ Two areas nevertheless deserve careful reports:
 | Area | Measure |
 | :-- | :-- |
 | Static analysis | CodeQL (`security-extended` queries), Go `vet` |
+| Logging | Structured JSON, which escapes every attribute value — a caller cannot forge a record through a newline. CodeQL's log-injection query reports those call sites regardless, because it does not model the handler; the alerts are dismissed as false positives and a test fails if the handler ever stops being JSON. Paths and queries are additionally bounded and percent-encoded before they are written, so the guarantee holds for any sink that is not JSON |
 | Dependencies | Dependabot alerts and grouped update PRs; `govulncheck` (Go), `pip-audit` (Python) |
 | Secrets | `gitleaks` over the full history on every push and pull request |
 | Database | Least-privilege roles — write-scoped ingestion, read-only gateway; row-level security on managed Postgres |

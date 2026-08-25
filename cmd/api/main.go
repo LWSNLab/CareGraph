@@ -16,6 +16,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -41,6 +42,12 @@ const (
 	readTimeout       = 15 * time.Second
 	writeTimeout      = 30 * time.Second
 	idleTimeout       = 60 * time.Second
+
+	// Go's default is 1 MB, which covers the request line — so a caller could
+	// send a megabyte of query string and have it read, parsed and logged on
+	// every request. This API takes an API key header and no cookies; 64 KiB is
+	// already far more than a legitimate client sends.
+	maxHeaderBytes = 64 << 10
 )
 
 // Above httpapi.DefaultRequestTimeout (15 s), which caps any single request, so
@@ -66,6 +73,24 @@ func main() {
 	os.Exit(run())
 }
 
+// newLogger builds the process logger.
+//
+// JSON to stderr: handlers log the cause of every 5xx here, and structured
+// output is what a log aggregator can filter on. The `service` field is set
+// once, so records stay attributable when several producers are collected
+// together. Level via CAREGRAPH_LOG_LEVEL.
+//
+// The encoding is a security property and not only a convenience. A JSON
+// handler escapes every attribute value, so a newline in a path or a query
+// cannot close the record and forge a second one. CodeQL's log-injection query
+// flags those call sites anyway, because it does not model the handler — which
+// makes those alerts false positives, and makes TestLogValuesCannotForgeARecord
+// the thing that keeps dismissing them honest.
+func newLogger(w io.Writer, level slog.Leveler) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level})).
+		With("service", "caregraph-api")
+}
+
 func run() int {
 	cfg, err := infrastructure.LoadConfig()
 	if err != nil {
@@ -75,13 +100,7 @@ func run() int {
 		return 1
 	}
 
-	// JSON to stderr: handlers log the cause of every 5xx here, and structured
-	// output is what a log aggregator can filter on. The `service` field is set
-	// once, so records stay attributable when several producers are collected
-	// together. Level via CAREGRAPH_LOG_LEVEL.
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: cfg.LogLevel,
-	})).With("service", "caregraph-api"))
+	slog.SetDefault(newLogger(os.Stderr, cfg.LogLevel))
 
 	pool, err := infrastructure.NewPostgresPool(cfg)
 	if err != nil {
@@ -147,6 +166,7 @@ func run() int {
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
 	// SIGTERM is what an orchestrator sends on deploy, scale-down and rollback.

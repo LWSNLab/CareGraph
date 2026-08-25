@@ -39,8 +39,9 @@ func AccessLog(log *slog.Logger) gin.HandlerFunc {
 		started := time.Now()
 
 		// Captured before c.Next(): a handler may rewrite the query, and the
-		// record should describe what was asked for.
-		path, query := c.Request.URL.Path, c.Request.URL.RawQuery
+		// record should describe what was asked for. Redacted here rather than at
+		// the point of use, so no later edit can log the raw form by accident.
+		path, query := SafePath(c.Request.URL.Path), RedactQuery(c.Request.URL.RawQuery)
 
 		c.Next()
 
@@ -89,7 +90,7 @@ func Recovery(log *slog.Logger) gin.HandlerFunc {
 
 			entry := Logger(log, c).With(
 				"method", c.Request.Method,
-				"path", c.Request.URL.Path,
+				"path", SafePath(c.Request.URL.Path),
 			)
 
 			// The client vanished mid-write. Nothing can be sent and nothing is
