@@ -9,6 +9,32 @@ entry here, and a merge into `main`.
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-08-25
+
+Deployment fixes. v0.1.0 could be installed and would answer `/readyz` with 200
+while being usable by nobody — every `/v1` route needs an API key, and the tool
+that issues one was not in the image.
+
+### Fixed
+
+- **The API image carries `apikey`.** Issuing and listing keys is the one routine
+  operator task on a server, and it previously required a Go toolchain beside the
+  container — which is what the image exists to avoid. Reached with
+  `--entrypoint /apikey`; the image build now fails if it is missing.
+- **The deployment runbook keeps its own promise.** It opens with "nothing here
+  needs a Go toolchain or `uv` on the server" and then told you to run targets
+  that need exactly those. Loading data and issuing keys now go through the
+  containers.
+- **`make ingest-*` can use the published image.** `CAREGRAPH_PROD=1` adds the
+  production overlay and pulls it; without it a server built its own copy of an
+  image CI had already built and tested.
+
+### Changed
+
+- CI no longer runs twice on a release. A push to `main` starts the release,
+  which calls CI itself, so the second run only cancelled the first and left a
+  grey "cancelled" beside the green checks.
+
 ## [0.1.0] — 2026-08-19
 
 First release. Pre-1.0 and honest about it: the API surface is complete and
@@ -57,5 +83,6 @@ answer from outside the project.
   OpenStreetMap objects carry no `addr:*` tags.
 - **Deduplication and address backfill are not built.**
 
-[Unreleased]: https://github.com/LWSNLab/CareGraph/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/LWSNLab/CareGraph/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LWSNLab/CareGraph/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/LWSNLab/CareGraph/releases/tag/v0.1.0
