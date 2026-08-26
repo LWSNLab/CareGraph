@@ -16,6 +16,7 @@ from datetime import date
 import pytest
 
 from pipelines.load.postgres_loader import (
+    _MAX_PROVIDER_BATCH_SIZE,
     _PROVIDER_VALUE_COLUMNS,
     _UPSERT_COLUMNS,
     LoadReport,
@@ -128,8 +129,11 @@ def test_provider_batch_sql_contains_multiple_rows_and_one_returning():
 
 
 def test_provider_batch_limit_matches_postgres_parameter_limit():
+    # Derived rather than written out: adding a column lowers the real ceiling,
+    # and a hardcoded number would stay above it and keep passing without ever
+    # testing the new one.
     with pytest.raises(ValueError, match="at most"):
-        PostgresLoader("unused").load_providers([], batch_size=4682)
+        PostgresLoader("unused").load_providers([], batch_size=_MAX_PROVIDER_BATCH_SIZE + 1)
 
 
 def test_provider_value_columns_are_derived_from_upsert_columns():

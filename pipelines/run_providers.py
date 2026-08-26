@@ -78,8 +78,8 @@ def main() -> int:
         print(f"💾 {len(records)} providers -> {out_path}")
     else:
         print(
-            f"⚠️  {len(records)} providers nicht veröffentlicht; "
-            f"letzter Snapshot bleibt erhalten: {out_path}"
+            f"⚠️  {len(records)} providers not published; "
+            f"the last snapshot is left untouched: {out_path}"
         )
     for provider_type, count in Counter(r.type for r in records).most_common():
         print(f"   {count:5}  {provider_type}")
