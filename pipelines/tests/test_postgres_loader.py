@@ -15,7 +15,12 @@ from datetime import date
 
 import pytest
 
-from pipelines.load.postgres_loader import LoadReport, PostgresLoader
+from pipelines.load.postgres_loader import (
+    _PROVIDER_VALUE_COLUMNS,
+    _UPSERT_COLUMNS,
+    LoadReport,
+    PostgresLoader,
+)
 from pipelines.scrapers.osm_provider_scraper import ProviderRecord
 
 params = PostgresLoader._provider_params
@@ -110,6 +115,25 @@ def test_coordinates_are_cast_so_all_null_rows_work():
 
 def test_location_is_built_by_postgis_not_in_python():
     assert "ST_SetSRID(" in PostgresLoader._upsert_sql()
+
+
+def test_provider_batch_sql_contains_multiple_rows_and_one_returning():
+    values = ", ".join(PostgresLoader._provider_values_sql(f"_{i}") for i in range(2))
+    sql = PostgresLoader._upsert_sql(values)
+
+    assert sql.count("INSERT INTO care_infrastructure") == 1
+    assert sql.count("RETURNING id") == 1
+    assert "%(source_id_0)s" in sql
+    assert "%(source_id_1)s" in sql
+
+
+def test_provider_batch_limit_matches_postgres_parameter_limit():
+    with pytest.raises(ValueError, match="at most"):
+        PostgresLoader("unused").load_providers([], batch_size=4682)
+
+
+def test_provider_value_columns_are_derived_from_upsert_columns():
+    assert _PROVIDER_VALUE_COLUMNS == ("source_id", *_UPSERT_COLUMNS)
 
 
 # -------------------------------------------------------------------- report

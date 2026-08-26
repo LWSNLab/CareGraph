@@ -16,7 +16,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
+import tempfile
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
@@ -50,13 +52,35 @@ def main() -> int:
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps([asdict(r) for r in records], ensure_ascii=False, indent=1),
-        encoding="utf-8",
-    )
+    # Never publish a partial regional result under the name consumed by the
+    # loader. A failed run must leave the last known-good snapshot untouched.
+    temp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=out_path.parent,
+            prefix=f".{out_path.name}.", suffix=".tmp", delete=False,
+        ) as temp:
+            temp_path = temp.name
+            json.dump([asdict(r) for r in records], temp, ensure_ascii=False, indent=1)
+            temp.write("\n")
+        if report.ok:
+            os.replace(temp_path, out_path)
+            temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
 
     print()
-    print(f"💾 {len(records)} providers -> {out_path}")
+    if report.ok:
+        print(f"💾 {len(records)} providers -> {out_path}")
+    else:
+        print(
+            f"⚠️  {len(records)} providers nicht veröffentlicht; "
+            f"letzter Snapshot bleibt erhalten: {out_path}"
+        )
     for provider_type, count in Counter(r.type for r in records).most_common():
         print(f"   {count:5}  {provider_type}")
 

@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from pipelines import run_gkv
+from pipelines import run_gkv, run_providers
 
 
 @pytest.fixture(autouse=True)
@@ -71,3 +71,25 @@ def test_run_gkv_returns_zero_on_success(monkeypatch, tmp_path):
     assert run_gkv.main() == 0
     assert (tmp_path / "krankenkassen_2026.csv").exists()
 
+
+def test_run_providers_keeps_last_snapshot_when_a_region_fails(monkeypatch, tmp_path):
+    from pipelines.scrapers.osm_provider_scraper import ProviderRecord, RunReport
+
+    output = tmp_path / "providers.json"
+    output.write_text('[{"source_id": "last-known-good"}]', encoding="utf-8")
+
+    monkeypatch.setattr(run_providers, "use_system_trust_store", lambda: True)
+    monkeypatch.setattr(
+        run_providers.OSMProviderScraper,
+        "fetch",
+        lambda self, regions: (
+            [ProviderRecord(type="pflegeheim_stationaer", name="Partial")],
+            RunReport(requested=list(regions), failed={"Bayern": "timeout"}),
+        ),
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["run_providers", "--bundesland", "Bayern", "--out", str(output)]
+    )
+
+    assert run_providers.main() == 1
+    assert output.read_text(encoding="utf-8") == '[{"source_id": "last-known-good"}]'
