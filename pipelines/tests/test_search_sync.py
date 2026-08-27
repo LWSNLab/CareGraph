@@ -73,6 +73,27 @@ def test_absent_optional_fields_are_omitted_not_blanked():
         assert field not in document, f"{field} was indexed as an empty value"
 
 
+def test_import_rejects_a_truncated_typesense_response(monkeypatch):
+    class Response:
+        text = '{"success":true}\n'
+        status_code = 200
+
+    monkeypatch.setattr("pipelines.search.sync.requests.request", lambda *a, **kw: Response())
+    client = TypesenseClient("http://typesense", "key")
+
+    with pytest.raises(TypesenseError, match="returned 1 results for 2 documents"):
+        client.import_documents("providers_test", [{"id": "1"}, {"id": "2"}])
+
+
+@integration
+def test_count_mismatch_never_publishes_the_new_collection(client, monkeypatch, seeded_providers):
+    key = os.environ.get("CAREGRAPH_TEST_TYPESENSE_KEY", "devkey")
+    monkeypatch.setattr(TypesenseClient, "document_count", lambda self, name: 0)
+
+    with pytest.raises(TypesenseError, match="expected"):
+        sync_index(DSN, TYPESENSE_URL, key, alias=TEST_ALIAS)
+
+
 def test_a_row_without_coordinates_still_indexes():
     document = _document({**ROW, "lat": None, "lon": None})
     assert "location" not in document

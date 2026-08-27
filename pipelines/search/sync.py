@@ -129,8 +129,14 @@ class TypesenseClient:
             data=payload.encode("utf-8"),
             headers={"Content-Type": "text/plain"},
         )
+        lines = response.text.splitlines()
+        if len(lines) != len(documents):
+            raise TypesenseError(
+                f"Typesense returned {len(lines)} results for {len(documents)} documents"
+            )
+
         failures = []
-        for line, document in zip(response.text.splitlines(), documents, strict=False):
+        for line, document in zip(lines, documents, strict=True):
             try:
                 if not json.loads(line).get("success", False):
                     failures.append(document.get("id", "<no id>"))
@@ -201,6 +207,19 @@ def sync_index(
         raise TypesenseError(
             "no indexable rows found — refusing to publish an empty index. "
             "Has the ingestion run?"
+        )
+
+    expected_documents = documents - len(dropped)
+    try:
+        indexed_documents = client.document_count(collection)
+    except Exception:
+        _drop_quietly(client, collection)
+        raise
+    if indexed_documents != expected_documents:
+        _drop_quietly(client, collection)
+        raise TypesenseError(
+            f"built collection contains {indexed_documents} documents, "
+            f"expected {expected_documents}; refusing to publish"
         )
 
     client.upsert_alias(alias, collection)

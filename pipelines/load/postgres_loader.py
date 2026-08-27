@@ -52,6 +52,13 @@ _UPSERT_COLUMNS = (
 # had resolved. Until the insurer key stopped flapping this was invisible,
 # because a run without an IK inserted a second row instead of updating.
 _PRESERVE_IF_NULL = frozenset({"ik_nummer"})
+_PROVIDER_VALUE_COLUMNS = (
+    "source_id", *_UPSERT_COLUMNS,
+)
+_POSTGRES_MAX_PARAMETERS = 65535
+_MAX_PROVIDER_BATCH_SIZE = _POSTGRES_MAX_PARAMETERS // (
+    len(_PROVIDER_VALUE_COLUMNS) + 2  # latitude and longitude
+)
 
 
 @dataclass
@@ -65,6 +72,7 @@ class LoadReport:
     history_rows: int = 0
     rekeyed: int = 0        # rows migrated from a name key to an IK key
     key_preserved: int = 0  # rows matched by name because this run had no IK
+    duplicates: int = 0     # repeated source IDs in the input; last record wins
 
     @property
     def ok(self) -> bool:
@@ -83,6 +91,8 @@ class LoadReport:
         # back thinner than the database already knew about.
         if self.key_preserved:
             parts.append(f"key_preserved={self.key_preserved}")
+        if self.duplicates:
+            parts.append(f"duplicates={self.duplicates}")
         return " ".join(parts)
 
 
@@ -98,7 +108,7 @@ class PostgresLoader:
         return psycopg.connect(self.dsn, row_factory=dict_row)
 
     @staticmethod
-    def _upsert_sql() -> str:
+    def _upsert_sql(values_sql: str | None = None) -> str:
         """INSERT … ON CONFLICT (source_id) DO UPDATE — the idempotent write.
 
         ``location`` is built from lon/lat inside SQL so PostGIS owns the
@@ -111,24 +121,30 @@ class PostgresLoader:
             return f"{col} = EXCLUDED.{col}"
 
         assignments = ",\n            ".join(assignment(col) for col in _UPSERT_COLUMNS)
+        # Each tuple brings its own parentheses, because the batch form supplies
+        # several of them. The VALUES keyword must therefore not add another pair
+        # — wrapped again, Postgres reads the whole list as a single row
+        # expression and reports more target columns than expressions.
+        values_sql = values_sql or """
+        (%(source_id)s, %(ik_nummer)s, %(type)s, %(name)s,
+         %(parent_organization)s, %(website)s, %(strasse)s, %(plz)s,
+         %(ort)s, %(bundesland)s, %(details)s, %(scraping_status)s,
+         -- Explicit casts: for records without coordinates (insurers today)
+         -- every parameter is NULL and Postgres cannot infer a type otherwise.
+         CASE
+             WHEN %(lon)s::double precision IS NULL
+               OR %(lat)s::double precision IS NULL THEN NULL
+             ELSE ST_SetSRID(
+                 ST_MakePoint(%(lon)s::double precision, %(lat)s::double precision),
+                 4326
+             )::geography
+         END)
+        """
         return f"""
         INSERT INTO care_infrastructure (
             source_id, {', '.join(_UPSERT_COLUMNS)}, location
-        ) VALUES (
-            %(source_id)s, %(ik_nummer)s, %(type)s, %(name)s,
-            %(parent_organization)s, %(website)s, %(strasse)s, %(plz)s,
-            %(ort)s, %(bundesland)s, %(details)s, %(scraping_status)s,
-            -- Explicit casts: for records without coordinates (insurers today)
-            -- every parameter is NULL and Postgres cannot infer a type otherwise.
-            CASE
-                WHEN %(lon)s::double precision IS NULL
-                  OR %(lat)s::double precision IS NULL THEN NULL
-                ELSE ST_SetSRID(
-                    ST_MakePoint(%(lon)s::double precision, %(lat)s::double precision),
-                    4326
-                )::geography
-            END
-        )
+        ) VALUES
+            {values_sql}
         ON CONFLICT (source_id) DO UPDATE SET
             {assignments},
             location = EXCLUDED.location,
@@ -136,27 +152,59 @@ class PostgresLoader:
         RETURNING id, (xmax = 0) AS inserted
         """
 
+    @staticmethod
+    def _provider_values_sql(suffix: str) -> str:
+        """Build one parameterised provider tuple for a multi-row upsert."""
+        parameters = ", ".join(
+            f"%({column}{suffix})s" for column in _PROVIDER_VALUE_COLUMNS
+        )
+        location = (
+            f"CASE WHEN %(lon{suffix})s::double precision IS NULL "
+            f"OR %(lat{suffix})s::double precision IS NULL THEN NULL "
+            f"ELSE ST_SetSRID(ST_MakePoint(%(lon{suffix})s::double precision, "
+            f"%(lat{suffix})s::double precision), 4326)::geography END"
+        )
+        return f"({parameters}, {location})"
+
     # -------------------------------------------------------------- providers
 
     def load_providers(self, records: Iterable[Any], batch_size: int = 500) -> LoadReport:
         """Upsert care providers (from OSM or open data) into care_infrastructure."""
         report = LoadReport()
-        rows = []
+        rows_by_source_id: dict[str, dict[str, Any]] = {}
 
         for record in records:
             params = self._provider_params(record)
             if params is None:
                 report.skipped.append(getattr(record, "name", "<unnamed>"))
                 continue
-            rows.append(params)
+            source_id = params["source_id"]
+            if source_id in rows_by_source_id:
+                report.duplicates += 1
+            rows_by_source_id[source_id] = params
 
-        sql = self._upsert_sql()
+        rows = list(rows_by_source_id.values())
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+        if batch_size > _MAX_PROVIDER_BATCH_SIZE:
+            raise ValueError(
+                f"batch_size must be at most {_MAX_PROVIDER_BATCH_SIZE} "
+                f"({_POSTGRES_MAX_PARAMETERS} PostgreSQL parameters maximum)"
+            )
+
         with self._connect() as conn:
             with conn.cursor() as cur:
                 for start in range(0, len(rows), batch_size):
-                    for params in rows[start: start + batch_size]:
-                        cur.execute(sql, params)
-                        result = cur.fetchone()
+                    batch = rows[start: start + batch_size]
+                    values = []
+                    query_params = {}
+                    for index, params in enumerate(batch):
+                        suffix = f"_{index}"
+                        values.append(self._provider_values_sql(suffix))
+                        query_params.update({f"{key}{suffix}": value for key, value in params.items()})
+                    batch_sql = self._upsert_sql(",\n            ".join(values))
+                    cur.execute(batch_sql, query_params)
+                    for result in cur.fetchall():
                         if result["inserted"]:
                             report.inserted += 1
                         else:
