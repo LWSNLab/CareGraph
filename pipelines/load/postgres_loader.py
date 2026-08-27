@@ -121,10 +121,16 @@ class PostgresLoader:
             return f"{col} = EXCLUDED.{col}"
 
         assignments = ",\n            ".join(assignment(col) for col in _UPSERT_COLUMNS)
+        # Each tuple brings its own parentheses, because the batch form supplies
+        # several of them. The VALUES keyword must therefore not add another pair
+        # — wrapped again, Postgres reads the whole list as a single row
+        # expression and reports more target columns than expressions.
         values_sql = values_sql or """
         (%(source_id)s, %(ik_nummer)s, %(type)s, %(name)s,
          %(parent_organization)s, %(website)s, %(strasse)s, %(plz)s,
          %(ort)s, %(bundesland)s, %(details)s, %(scraping_status)s,
+         -- Explicit casts: for records without coordinates (insurers today)
+         -- every parameter is NULL and Postgres cannot infer a type otherwise.
          CASE
              WHEN %(lon)s::double precision IS NULL
                OR %(lat)s::double precision IS NULL THEN NULL
@@ -137,9 +143,8 @@ class PostgresLoader:
         return f"""
         INSERT INTO care_infrastructure (
             source_id, {', '.join(_UPSERT_COLUMNS)}, location
-        ) VALUES (
+        ) VALUES
             {values_sql}
-        )
         ON CONFLICT (source_id) DO UPDATE SET
             {assignments},
             location = EXCLUDED.location,

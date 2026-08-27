@@ -11,6 +11,7 @@ the integration tests need a real PostGIS database and skip without one.
 from __future__ import annotations
 
 import os
+import re
 from datetime import date
 
 import pytest
@@ -126,6 +127,49 @@ def test_provider_batch_sql_contains_multiple_rows_and_one_returning():
     assert sql.count("RETURNING id") == 1
     assert "%(source_id_0)s" in sql
     assert "%(source_id_1)s" in sql
+
+
+def _values_shape(sql: str) -> tuple[int, list[int]]:
+    """Column count, and the expression count of each top-level VALUES tuple."""
+    columns = re.search(
+        r"INSERT INTO care_infrastructure \((.*?)\)\s*VALUES", sql, re.S
+    ).group(1)
+    body = re.sub(r"--[^\n]*", "", sql.split("VALUES", 1)[1].split("ON CONFLICT", 1)[0])
+
+    depth, expressions, current = 0, [], 0
+    for char in body:
+        if char == "(":
+            depth += 1
+            if depth == 1:
+                current = 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                expressions.append(current)
+        elif char == "," and depth == 1:
+            current += 1
+    return len([c for c in columns.split(",") if c.strip()]), expressions
+
+
+# The substring test above passed while the SQL was unusable: every tuple carries
+# its own parentheses, and the VALUES keyword wrapped them in another pair, so
+# Postgres read the whole list as one row expression. Only an integration test
+# with a live database caught it. This counts the shape instead, which needs no
+# database and fails on the same mistake.
+@pytest.mark.parametrize("rows", [1, 2, 500])
+def test_values_tuples_match_the_insert_column_count(rows):
+    if rows == 1:
+        sql = PostgresLoader._upsert_sql()
+    else:
+        sql = PostgresLoader._upsert_sql(
+            ", ".join(PostgresLoader._provider_values_sql(f"_{i}") for i in range(rows))
+        )
+
+    columns, expressions = _values_shape(sql)
+    assert len(expressions) == rows, "one tuple per row"
+    assert set(expressions) == {columns}, (
+        f"every tuple must hold {columns} expressions, got {sorted(set(expressions))}"
+    )
 
 
 def test_provider_batch_limit_matches_postgres_parameter_limit():
