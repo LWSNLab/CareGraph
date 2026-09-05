@@ -73,9 +73,12 @@ answer from outside the project.
 
 ### Known limitations
 
-- **Provider IK numbers are missing.** Every Leistungserbringer has one, but no
-  public source publishes them. A data-sharing request is with the
-  GKV-Spitzenverband.
+- **Provider IK numbers are missing, and will stay missing.** Every
+  Leistungserbringer has one, but no public source publishes them. The bodies
+  that hold the pairing were asked and declined: the number is not among the
+  data whose publication is legally provided for, and it is maintained for
+  billing rather than for identification by third parties. Providers are reached
+  by name and location instead.
 - **The published archive holds care providers only.** Insurers need the GKV list
   PDF; hospitals are excluded until the Standortverzeichnis answers a
   redistribution question.
