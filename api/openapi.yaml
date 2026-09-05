@@ -155,8 +155,13 @@ paths:
         **Coverage caveat.** Every Leistungserbringer has an IK, but only the
         statutory insurers' numbers are published anywhere public. Care
         providers and hospitals carry no `ik_nummer` and cannot be addressed
-        here yet — reach them through `/v1/infrastructure/search` or
+        here — reach them through `/v1/infrastructure/search` or
         `/v1/infrastructure/near`.
+
+        This is permanent rather than pending. The bodies that hold the pairing
+        of provider and IK were asked and declined in writing: the number is not
+        among the data whose publication is legally provided for, and it is
+        maintained for billing rather than for identification by third parties.
       operationId: getProviderByIK
       tags: [Infrastructure]
       parameters:
@@ -359,8 +364,9 @@ components:
           type: string
           pattern: '^[0-9]{9}$'
           description: |
-            Institutionskennzeichen. Present for statutory insurers; absent for
-            care providers and hospitals, whose IKs no public source publishes.
+            Institutionskennzeichen. Present for statutory insurers; permanently
+            absent for care providers and hospitals — no public source publishes
+            theirs, and the bodies that hold them declined to share them.
           # A real one (Techniker Krankenkasse): an invented IK gets copied into a
           # request and fails silently.
           example: "101576623"

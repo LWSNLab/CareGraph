@@ -86,7 +86,7 @@ Overpass and takes minutes.
 | **Contains** | ~7,500 care providers: outpatient services, nursing homes, Pflegestützpunkte |
 | **Every record has** | a name and coordinates |
 | **Roughly a third lack** | a full street address — their OpenStreetMap objects carry no `addr:*` tags |
-| **No record has** | an Institutionskennzeichen; no public source publishes provider IKs |
+| **No provider record has** | an Institutionskennzeichen. No public source publishes them, and the bodies that hold them declined in writing — the number is maintained for billing, not for identification by third parties. Providers are found by name and location instead |
 | **Not included** | the statutory insurers — `make load-insurers` fetches those from the official GKV publication |
 | **Licence** | ODbL v1.0, attribution required: *© OpenStreetMap contributors* |
 
