@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -115,4 +116,53 @@ func jsonFields(t reflect.Type) (emitted, optional []string) {
 	sort.Strings(emitted)
 	sort.Strings(optional)
 	return emitted, optional
+}
+
+// TestTheStorableIdentifierIsNamedAsSuch guards a sentence rather than a shape.
+//
+// The defect it exists for was exactly that: `id` was described as "Stable
+// identifier for this record" while being a per-database primary key, and every
+// structural test passed — the field was present, typed and required. A caller
+// told a field is stable stores it, and on the next import into a fresh database
+// every stored reference silently resolves to nothing.
+//
+// So this reads the prose. Not for wording, which would be brittle, but for two
+// things that cannot both hold by accident: the storable identifier is required,
+// and the description of `id` sends the reader to it.
+func TestTheStorableIdentifierIsNamedAsSuch(t *testing.T) {
+	ref, ok := loadSpec(t).Components.Schemas["CareProvider"]
+	if !ok {
+		t.Fatal("components.schemas.CareProvider is missing")
+	}
+	schema := ref.Value
+
+	if !slices.Contains(schema.Required, "source_id") {
+		t.Error("source_id is not required; a caller cannot key on a field that may be absent")
+	}
+
+	sourceID, ok := schema.Properties["source_id"]
+	if !ok {
+		t.Fatal("CareProvider has no source_id — there is nothing to store")
+	}
+	if !strings.Contains(strings.ToLower(sourceID.Value.Description), "store") {
+		t.Errorf("source_id does not say it is the one to store:\n%s", sourceID.Value.Description)
+	}
+
+	id, ok := schema.Properties["id"]
+	if !ok {
+		return // Removing it is the other acceptable answer.
+	}
+	description := strings.ToLower(id.Value.Description)
+
+	// The exact phrase that was wrong, and the shape of the same mistake.
+	for _, claim := range []string{"stable identifier", "stable id ", "persistent identifier"} {
+		if strings.Contains(description, claim) {
+			t.Errorf("`id` is described as a %q, but it is minted per database:\n%s",
+				strings.TrimSpace(claim), id.Value.Description)
+		}
+	}
+	if !strings.Contains(description, "source_id") {
+		t.Errorf("`id` does not point at the identifier that is storable:\n%s",
+			id.Value.Description)
+	}
 }

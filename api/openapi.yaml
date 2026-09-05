@@ -353,12 +353,32 @@ components:
 
         **Optional fields are omitted, never `null`.** Test for the key's
         presence, not for a null value.
-      required: [id, type, name, address]
+      required: [source_id, id, type, name, address]
       properties:
+        source_id:
+          type: string
+          description: |
+            **The identifier to store.** Derived from the source object, carried
+            in the published dataset, and identical on every instance that
+            imported the same archive — so a reference kept here still resolves
+            against someone else's deployment.
+
+            It is stable, not eternal: it follows the source object, and an
+            OpenStreetMap way that is split or re-drawn takes a new one. What
+            happens then is not yet promised, so treat a reference that stops
+            resolving as a record to re-match rather than as an error.
+          example: "osm:way/123456789"
         id:
           type: string
           format: uuid
-          description: Stable identifier for this record.
+          description: |
+            Unique **within one instance only** — a database primary key, minted
+            by whichever deployment wrote the row. Two instances give the same
+            provider different values, and re-importing the dataset into an empty
+            database changes them again.
+
+            Useful for talking to one deployment about one row. Not for storing:
+            use `source_id`.
           example: "c3b9a12e-1234-5678-90ab-cdef12345678"
         ik_nummer:
           type: string

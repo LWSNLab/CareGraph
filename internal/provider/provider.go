@@ -30,6 +30,10 @@ type Address struct {
 // CareProvider schema in api/openapi.yaml — enforced by api/schema_test.go,
 // which compares these tags against that schema in both directions.
 type Provider struct {
+	// SourceID is what a caller stores. It travels in the published dataset and
+	// is identical on every instance that imported it; ID is a per-database key
+	// and is not.
+	SourceID           string         `json:"source_id"`
 	ID                 string         `json:"id"`
 	IKNummer           *string        `json:"ik_nummer,omitempty"`
 	Type               Type           `json:"type"`
