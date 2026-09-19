@@ -69,7 +69,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           cache-dependency-path: go.sum
 
       # A service container does not run docker-entrypoint-initdb.d, so the
