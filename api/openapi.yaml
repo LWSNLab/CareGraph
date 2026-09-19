@@ -16,7 +16,7 @@ info:
     as `/v2` and never as a changed meaning of an existing field.
   # The release serving this document, written by `make set-version`. The
   # contract's *breaking* version is the `/v1` in every path, not this number.
-  version: 0.1.1
+  version: 0.2.0
   contact:
     name: CareGraph
     # The repository rather than an address: an inbox that does not receive mail
@@ -155,8 +155,13 @@ paths:
         **Coverage caveat.** Every Leistungserbringer has an IK, but only the
         statutory insurers' numbers are published anywhere public. Care
         providers and hospitals carry no `ik_nummer` and cannot be addressed
-        here yet — reach them through `/v1/infrastructure/search` or
+        here — reach them through `/v1/infrastructure/search` or
         `/v1/infrastructure/near`.
+
+        This is permanent rather than pending. The bodies that hold the pairing
+        of provider and IK were asked and declined in writing: the number is not
+        among the data whose publication is legally provided for, and it is
+        maintained for billing rather than for identification by third parties.
       operationId: getProviderByIK
       tags: [Infrastructure]
       parameters:
@@ -348,19 +353,40 @@ components:
 
         **Optional fields are omitted, never `null`.** Test for the key's
         presence, not for a null value.
-      required: [id, type, name, address]
+      required: [source_id, id, type, name, address]
       properties:
+        source_id:
+          type: string
+          description: |
+            **The identifier to store.** Derived from the source object, carried
+            in the published dataset, and identical on every instance that
+            imported the same archive — so a reference kept here still resolves
+            against someone else's deployment.
+
+            It is stable, not eternal: it follows the source object, and an
+            OpenStreetMap way that is split or re-drawn takes a new one. What
+            happens then is not yet promised, so treat a reference that stops
+            resolving as a record to re-match rather than as an error.
+          example: "osm:way/123456789"
         id:
           type: string
           format: uuid
-          description: Stable identifier for this record.
+          description: |
+            Unique **within one instance only** — a database primary key, minted
+            by whichever deployment wrote the row. Two instances give the same
+            provider different values, and re-importing the dataset into an empty
+            database changes them again.
+
+            Useful for talking to one deployment about one row. Not for storing:
+            use `source_id`.
           example: "c3b9a12e-1234-5678-90ab-cdef12345678"
         ik_nummer:
           type: string
           pattern: '^[0-9]{9}$'
           description: |
-            Institutionskennzeichen. Present for statutory insurers; absent for
-            care providers and hospitals, whose IKs no public source publishes.
+            Institutionskennzeichen. Present for statutory insurers; permanently
+            absent for care providers and hospitals — no public source publishes
+            theirs, and the bodies that hold them declined to share them.
           # A real one (Techniker Krankenkasse): an invented IK gets copied into a
           # request and fails silently.
           example: "101576623"

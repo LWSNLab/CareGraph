@@ -38,7 +38,7 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 
 // providerColumns is the column list every provider query selects, in the order
 // scanProvider expects.
-const providerColumns = `id::text, ik_nummer, type::text, name,
+const providerColumns = `source_id, id::text, ik_nummer, type::text, name,
        parent_organization, website, strasse, plz, ort, bundesland, details`
 
 // originPoint builds the search origin. It is repeated inline rather than
@@ -183,7 +183,7 @@ func scanProvider(row pgx.Row, dst *Provider, extra ...any) error {
 		ik, parent, website, street, plz, ort, land *string
 	)
 	targets := []any{
-		&dst.ID, &ik, &typeStr, &dst.Name,
+		&dst.SourceID, &dst.ID, &ik, &typeStr, &dst.Name,
 		&parent, &website, &street, &plz, &ort, &land,
 		&dst.Details,
 	}

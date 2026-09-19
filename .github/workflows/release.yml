@@ -63,7 +63,7 @@ jobs:
       - uses: actions/setup-go@v7
         if: steps.v.outputs.release == 'true'
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           cache-dependency-path: go.sum
 
       # VERSION, pyproject.toml and openapi.yaml must agree, and the version must

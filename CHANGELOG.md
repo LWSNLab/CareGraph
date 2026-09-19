@@ -9,6 +9,46 @@ entry here, and a merge into `main`.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-13
+
+The identifier a client should store is now in every response, and the search
+index can no longer be published with records missing. No migration; a running
+deployment picks this up like any other release.
+
+### Added
+
+- **`source_id` in every provider record, and required.** It is derived from the
+  source object — `osm:way/123456789` — travels in the published dataset, and is
+  identical on every instance that imported the same archive. It is the
+  identifier to store.
+
+### Fixed
+
+- **`id` was documented as a stable identifier. It is not.** It is a database
+  primary key, minted per deployment: two instances give the same provider
+  different values, and re-importing the dataset into an empty database changes
+  them again. **If you stored `id`, switch to `source_id`** — nothing fails when a
+  stored `id` stops matching, the record is simply not found.
+- **A search rebuild could publish an index with records missing.** A truncated
+  response from Typesense was accepted as complete, and the run reported every
+  document as indexed. Rebuilds now compare the built collection against what was
+  sent, less what Typesense explicitly rejected, and refuse to switch the alias on
+  a mismatch — the previous index keeps serving.
+- **A provider scrape with failed regions overwrote the last good snapshot.** It
+  exited non-zero, but the file a later load reads already held the partial
+  result. It is now written aside and only replaces the snapshot when every
+  region succeeded.
+- **Provider loading did one database round trip per record** despite a
+  `batch_size` setting. Each batch is now one statement, the insert/update counts
+  are unchanged, and repeated source IDs in the input are reported as
+  `duplicates=` instead of disappearing.
+
+### Changed
+
+- **Provider IK numbers are permanently absent rather than pending.** The bodies
+  that hold them declined in writing; see *Known limitations* under 0.1.0.
+  Providers are reached by name and location, and stored by `source_id`.
+
 ## [0.1.1] — 2026-08-25
 
 Deployment fixes. v0.1.0 could be installed and would answer `/readyz` with 200
@@ -73,9 +113,12 @@ answer from outside the project.
 
 ### Known limitations
 
-- **Provider IK numbers are missing.** Every Leistungserbringer has one, but no
-  public source publishes them. A data-sharing request is with the
-  GKV-Spitzenverband.
+- **Provider IK numbers are missing, and will stay missing.** Every
+  Leistungserbringer has one, but no public source publishes them. The bodies
+  that hold the pairing were asked and declined: the number is not among the
+  data whose publication is legally provided for, and it is maintained for
+  billing rather than for identification by third parties. Providers are reached
+  by name and location instead.
 - **The published archive holds care providers only.** Insurers need the GKV list
   PDF; hospitals are excluded until the Standortverzeichnis answers a
   redistribution question.
@@ -83,6 +126,7 @@ answer from outside the project.
   OpenStreetMap objects carry no `addr:*` tags.
 - **Deduplication and address backfill are not built.**
 
-[Unreleased]: https://github.com/LWSNLab/CareGraph/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/LWSNLab/CareGraph/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/LWSNLab/CareGraph/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/LWSNLab/CareGraph/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/LWSNLab/CareGraph/releases/tag/v0.1.0
