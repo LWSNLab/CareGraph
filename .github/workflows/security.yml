@@ -22,16 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: "1.25"
-          cache-dependency-path: go.sum
-      # govulncheck reports only vulnerabilities that are actually reachable
-      # from our code, which keeps the signal-to-noise ratio usable.
+      # No setup-go step: govulncheck-action installs its own toolchain from
+      # go-version-input. Doing both made the second install unpack over the
+      # first, and the job died in `tar` with "Cannot open: File exists" before
+      # ever scanning — a red security check that had found nothing, which is
+      # the worst kind: it reports failure while reporting nothing.
       - name: Run govulncheck
         uses: golang/govulncheck-action@v1
         with:
-          go-version-input: "1.25"
+          go-version-input: "1.26"
           repo-checkout: false
 
   python-vulns:
