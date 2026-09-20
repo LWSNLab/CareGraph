@@ -173,6 +173,9 @@ dataset-import: ## Import a dataset archive (FILE=dist/....tar.gz)
 	@test -n "$(FILE)" || (echo "usage: make dataset-import FILE=dist/caregraph-providers-YYYY-MM-DD.tar.gz" && exit 1)
 	$(call with_env, uv run --project pipelines python -m pipelines.run_dataset import --file "$(FILE)")
 
+geocode: ## Fill missing addresses from coordinates (ARGS="--dry-run", --limit N)
+	$(call with_env, uv run --project pipelines python -m pipelines.run_geocode backfill $(ARGS))
+
 search-sync: ## Rebuild the Typesense search index from Postgres
 	$(call with_env, uv run --project pipelines python -m pipelines.run_search sync)
 
