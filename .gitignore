@@ -46,3 +46,6 @@ pipelines/data/processed/
 # pip-audit export (CI artifact)
 pipelines/requirements-audit.txt
 dist/
+
+# Deployment state on a server (digests, last good Caddyfile)
+deploy/state/

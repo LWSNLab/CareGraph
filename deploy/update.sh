@@ -1,60 +1,61 @@
 #!/bin/sh
-# Pull the current release, apply it, and check that it actually works.
+# deploy/update.sh
 #
-# The server fetches; nothing pushes to it. No inbound port beyond 80/443, and no
-# server credentials at GitHub — a compromised workflow cannot reach this machine.
+# The automated path: find what the followed tag points at now, move the
+# checkout to the matching revision, and deploy that digest.
 #
-# Run from a timer (see deploy/README.md) or by hand after a merge to main.
+# The server fetches; nothing pushes to it. No inbound port beyond 80/443 and no
+# server credentials at GitHub — a compromised workflow cannot reach this
+# machine. The cost is up to one timer interval of delay.
+#
+# Run from a timer (see deploy/README.md) or by hand.
+#
+# What changed from following `latest` directly: the tag is resolved to a digest
+# **once**, here, and that digest is what gets deployed and recorded. Before,
+# compose resolved `latest` itself on every run, so the thing that went live was
+# whatever the tag meant at that second — and no record was kept of which image
+# that had been.
 
 set -eu
 
-cd "$(dirname "$0")/.."
+. "$(dirname "$0")/lib.sh"
 
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile app --profile edge"
+require_env
 
-# The compose files, Caddyfile and migrations come from the checkout; only the
-# application images come from the registry. --ff-only so a dirty server refuses
-# rather than silently merging.
-git pull --ff-only
+FOLLOW="${CAREGRAPH_FOLLOW:-latest}"
+REGISTRY="${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}"
 
-$COMPOSE pull
-$COMPOSE up -d
+say "Checking what $FOLLOW points at"
 
-# The compose mount only runs migrations when the volume is empty, so an update
-# would otherwise leave an existing database on the old schema — the API starts,
-# its readiness probe passes on a plain ping, and every query then fails. All
-# migrations are re-runnable; CI applies them twice to keep that true.
-make migrate
+API="$(resolve_digest "$REGISTRY/caregraph-api:$FOLLOW")"
+INGEST="$(resolve_digest "$REGISTRY/caregraph-ingest:$FOLLOW")"
 
-# Superseded layers would otherwise accumulate until the disk fills.
-docker image prune -f >/dev/null
+CURRENT="$(current_digest)"
 
-# Without this an update counts as successful the moment a container starts. The
-# check goes over the public name rather than 127.0.0.1, because that is the path
-# users take: a container can be perfectly healthy while the certificate, the
-# proxy or DNS is not.
-domain=$(sed -n 's/^CAREGRAPH_DOMAIN=//p' .env | tr -d '"')
-if [ -z "$domain" ]; then
-    echo "no CAREGRAPH_DOMAIN in .env — skipping the public check" >&2
+# The timer runs every ten minutes. Without this the stack would be re-deployed
+# and the migrations re-applied on every tick, which works — they are
+# re-runnable — but fills the log with activity that did nothing.
+if [ "$API" = "$CURRENT" ]; then
+    say "Already running $API — nothing to do"
     exit 0
 fi
 
-echo "verifying https://$domain/readyz"
-for _ in $(seq 1 30); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$domain/readyz" || true)
-    case "$code" in
-        200) echo "update verified: the service answers over TLS"; exit 0 ;;
-        503) echo "reachable, but a required dependency is down" >&2; break ;;
-    esac
-    sleep 5
-done
+REVISION="$(image_label "$API" org.opencontainers.image.revision)"
+[ -n "$REVISION" ] || {
+    fail "$API carries no revision label; refusing to guess which migrations belong to it."
+    exit 1
+}
 
-echo "UPDATE NOT VERIFIED — https://$domain/readyz last answered '$code'" >&2
-echo "Recent API log:" >&2
-$COMPOSE logs --tail=50 api >&2
-echo >&2
-echo "The new images are running. To go back to a known build, set" >&2
-echo "CAREGRAPH_TAG=v<previous> in .env and re-run this script." >&2
-echo "Rolling back is deliberate rather than automatic: migrations have already" >&2
-echo "been applied, and an older image against a newer schema can be worse." >&2
-exit 1
+# The checkout supplies the compose files, the Caddyfile and the migrations, so
+# it has to be the revision this image was built from. Fetched and checked out
+# explicitly rather than pulled: following a branch would move the checkout to
+# whatever is newest, which is not necessarily what the registry is serving.
+say "Moving the checkout to $(echo "$REVISION" | cut -c1-7)"
+git -C "$ROOT" fetch --quiet --tags origin
+git -C "$ROOT" checkout --quiet --detach "$REVISION"
+
+# Superseded layers would otherwise accumulate until the disk fills. Before the
+# deploy, so a failure leaves the previous image in place to roll back to.
+docker image prune -f >/dev/null
+
+exec "$ROOT/deploy/deploy.sh" "$API" "$INGEST"

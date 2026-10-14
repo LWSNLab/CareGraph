@@ -35,7 +35,11 @@ services:
     # Pulled from GHCR, not built here: the image CI tested is the image that
     # runs. `build:` is inherited from the base file and only used with --build,
     # which is the fallback when there is no registry access.
-    image: ${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}/caregraph-api:${CAREGRAPH_TAG:-latest}
+    # One variable holding the whole reference, because a digest is
+    # `repo@sha256:…` and cannot be written as `name:${TAG}`. Deployment is
+    # by digest (deploy/deploy.sh); the tag below is only the fallback for a
+    # manual `up` before anything has been deployed.
+    image: ${CAREGRAPH_API_IMAGE:-${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}/caregraph-api:${CAREGRAPH_TAG:-latest}}
     ports: !override
       # Loopback only — publishing it would let anyone bypass TLS. Still
       # published so an operator can curl it on the box.
@@ -54,7 +58,7 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
 
   ingest:
-    image: ${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}/caregraph-ingest:${CAREGRAPH_TAG:-latest}
+    image: ${CAREGRAPH_INGEST_IMAGE:-${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}/caregraph-ingest:${CAREGRAPH_TAG:-latest}}
 
   redis:
     restart: unless-stopped
