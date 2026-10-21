@@ -48,6 +48,10 @@ services:
       # The subnet below, and nothing wider: too narrow and every client shares
       # one rate-limit bucket, too wide and a client can forge its own address.
       CAREGRAPH_TRUSTED_PROXIES: ${CAREGRAPH_TRUSTED_PROXIES:-172.28.0.0/16}
+      # Read-only role in production; fall back to owner only if CAREGRAPH_ROLE_PW_API is unset.
+      DATABASE_URL: postgres://caregraph_api:${CAREGRAPH_ROLE_PW_API:-${POSTGRES_PASSWORD:-caregraph}}@db:5432/${POSTGRES_DB:-caregraph}?sslmode=disable
+      # Used only by `docker compose ... run --rm --entrypoint /apikey api ...`
+      ADMIN_DATABASE_URL: postgres://${POSTGRES_USER:-caregraph}:${POSTGRES_PASSWORD:-caregraph}@db:5432/${POSTGRES_DB:-caregraph}?sslmode=disable
 
   db:
     restart: unless-stopped
@@ -59,6 +63,8 @@ services:
 
   ingest:
     image: ${CAREGRAPH_INGEST_IMAGE:-${CAREGRAPH_REGISTRY:-ghcr.io/lwsnlab}/caregraph-ingest:${CAREGRAPH_TAG:-latest}}
+    environment:
+      INGEST_DATABASE_URL: postgres://caregraph_ingest:${CAREGRAPH_ROLE_PW_INGEST:-${POSTGRES_PASSWORD:-caregraph}}@db:5432/${POSTGRES_DB:-caregraph}?sslmode=disable
 
   redis:
     restart: unless-stopped

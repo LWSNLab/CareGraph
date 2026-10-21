@@ -123,6 +123,7 @@ func ptr[T any](v T) *T { return &v }
 // fullProvider sets every optional field, so response validation sees each one.
 func fullProvider() provider.Provider {
 	return provider.Provider{
+		SourceID:           "ik:101576623",
 		ID:                 "c3b9a12e-1234-5678-90ab-cdef12345678",
 		IKNummer:           ptr("101576623"),
 		Type:               provider.TypeKrankenkasse,
@@ -142,9 +143,10 @@ func fullProvider() provider.Provider {
 // an omitempty `*string` must be absent rather than null.
 func minimalProvider() provider.Provider {
 	return provider.Provider{
-		ID:   "8f14e45f-ceea-467a-9575-4b1c0dbfda2a",
-		Type: provider.TypePflegedienstAmbulant,
-		Name: "Ambulanter Pflegedienst",
+		SourceID: "osm:node/123456789",
+		ID:       "8f14e45f-ceea-467a-9575-4b1c0dbfda2a",
+		Type:     provider.TypePflegedienstAmbulant,
+		Name:     "Ambulanter Pflegedienst",
 		Address: provider.Address{
 			Street: "Bahnhofstraße 12", PostalCode: "86609", City: "Donauwörth",
 		},

@@ -62,8 +62,8 @@ printf '\n== Not reachable from outside\n'
 closed() {
     label="$1"
     port="$2"
-    curl -sS --max-time 6 "http://$DOMAIN:$port/" >/dev/null 2>&1
-    status=$?
+    status=0
+    curl -sS --max-time 6 "http://$DOMAIN:$port/" >/dev/null 2>&1 || status=$?
     case "$status" in
         7|28) ok "$label (port $port) is closed" ;;
         0)    bad "$label (port $port) ANSWERS from outside" ;;

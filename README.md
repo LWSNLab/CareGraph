@@ -169,7 +169,8 @@ Pre-1.0, and honest about which parts are real:
 | Ingestion | ✅ OSM providers, GKV insurer list, IK enrichment, Bundes-Klinik-Atlas hospitals |
 | `GET /healthz` | ✅ liveness — deliberately does not probe dependencies |
 | `GET /readyz` | ✅ readiness — Postgres, Redis and Typesense, with severity per dependency |
-| Deduplication, address backfill | ⏳ planned |
+| Address backfill | ✅ reverse geocoding via Nominatim (`make geocode`), cached & rate-limited |
+| Deduplication | ⏳ planned |
 
 See the [documentation repo](https://github.com/LWSNLab/CareGraph_Doc) for the
 roadmap and the story-level detail.

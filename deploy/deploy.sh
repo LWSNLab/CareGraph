@@ -50,15 +50,17 @@ require_matching_checkout "$API_IMAGE"
 # application is touched, not after.
 reload_caddy
 
-start_with "$API_IMAGE" "$INGEST_IMAGE"
-
 # Migrations come from the checkout, which the revision check above has already
 # tied to this image. The compose mount only applies them when the volume is
 # empty, so an update would otherwise leave an existing database on the old
 # schema — the API starts, its readiness probe passes on a plain ping, and every
-# query then fails.
+# query then fails. Applied before starting the new API container so the schema
+# is in place when the new binary boots.
 say "Applying migrations"
+$COMPOSE up -d db
 make -C "$ROOT" migrate
+
+start_with "$API_IMAGE" "$INGEST_IMAGE"
 
 say "Waiting for the API to report itself healthy"
 

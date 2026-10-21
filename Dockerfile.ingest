@@ -22,6 +22,7 @@ COPY pipelines/pyproject.toml pipelines/uv.lock ./pipelines/
 RUN --mount=type=cache,target=/root/.cache/uv \
     cd pipelines && uv sync --locked --no-dev --no-install-project
 
+COPY VERSION ./VERSION
 COPY pipelines/ ./pipelines/
 
 # Not for executing: `dataset export` stamps the newest filename into

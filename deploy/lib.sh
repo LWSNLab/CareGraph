@@ -129,13 +129,21 @@ start_with() {
     # --no-build: there is no source tree worth building from on a server, and
     # without it a failed pull silently becomes a local build whose result
     # nobody tested.
-    CAREGRAPH_API_IMAGE="$api_image" \
-    CAREGRAPH_INGEST_IMAGE="${ingest_image:-$api_image}" \
-        $COMPOSE pull api caddy
+    if [ -n "$ingest_image" ]; then
+        CAREGRAPH_API_IMAGE="$api_image" \
+        CAREGRAPH_INGEST_IMAGE="$ingest_image" \
+            $COMPOSE pull api caddy
 
-    CAREGRAPH_API_IMAGE="$api_image" \
-    CAREGRAPH_INGEST_IMAGE="${ingest_image:-$api_image}" \
-        $COMPOSE up -d --no-build
+        CAREGRAPH_API_IMAGE="$api_image" \
+        CAREGRAPH_INGEST_IMAGE="$ingest_image" \
+            $COMPOSE up -d --no-build
+    else
+        CAREGRAPH_API_IMAGE="$api_image" \
+            $COMPOSE pull api caddy
+
+        CAREGRAPH_API_IMAGE="$api_image" \
+            $COMPOSE up -d --no-build
+    fi
 }
 
 # Check the Caddyfile and reload it into a running Caddy.
