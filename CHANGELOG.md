@@ -9,6 +9,12 @@ entry here, and a merge into `main`.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-22
+
+Addresses missing from OpenStreetMap can now be backfilled from provider
+coordinates, and production deployments are pinned to immutable image digests
+with automated post-deploy verification and one-command rollback.
+
 ### Added
 
 - **Address backfill from coordinates (`make geocode`).** Providers whose
@@ -140,7 +146,8 @@ answer from outside the project.
   OpenStreetMap objects carry no `addr:*` tags.
 - **Deduplication and address backfill are not built.**
 
-[Unreleased]: https://github.com/LWSNLab/CareGraph/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/LWSNLab/CareGraph/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/LWSNLab/CareGraph/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/LWSNLab/CareGraph/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/LWSNLab/CareGraph/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/LWSNLab/CareGraph/releases/tag/v0.1.0

@@ -62,7 +62,7 @@ set-version: ## Set the release version everywhere (VERSION=1.2.3)
 	# which is CI and the ingestion image build. Nothing caught this at 0.1.0
 	# because the version had never moved.
 	@cd pipelines && uv lock --quiet
-	@go test ./api/ -run 'Version|Changelog' >/dev/null \
+	@go test ./api/ -run '^TestVersion' >/dev/null \
 		&& echo "version $(VERSION) set in VERSION, pyproject.toml, openapi.yaml and uv.lock"
 	@echo "now add a ## [$(VERSION)] section to CHANGELOG.md, then merge to main"
 
