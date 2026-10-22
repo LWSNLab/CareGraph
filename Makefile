@@ -40,7 +40,13 @@ ps: ## Show running services
 	docker compose ps
 
 migrate: ## Apply ALL migrations to the running db, in order
-	@for m in db/migrations/*.sql; do \
+	@if [ -f .env ]; then \
+		while IFS='=' read -r key value; do \
+			case "$$key" in ''|\#*) continue ;; esac; \
+			printenv "$$key" >/dev/null || export "$$key=$$value"; \
+		done < .env; \
+	fi; \
+	for m in db/migrations/*.sql; do \
 		echo "applying $$m"; \
 		docker compose exec -T db psql -U $${POSTGRES_USER:-caregraph} -d $${POSTGRES_DB:-caregraph} -v ON_ERROR_STOP=1 -q < $$m || exit 1; \
 	done
@@ -56,7 +62,7 @@ set-version: ## Set the release version everywhere (VERSION=1.2.3)
 	# which is CI and the ingestion image build. Nothing caught this at 0.1.0
 	# because the version had never moved.
 	@cd pipelines && uv lock --quiet
-	@go test ./api/ -run 'Version|Changelog' >/dev/null \
+	@go test ./api/ -run '^TestVersion' >/dev/null \
 		&& echo "version $(VERSION) set in VERSION, pyproject.toml, openapi.yaml and uv.lock"
 	@echo "now add a ## [$(VERSION)] section to CHANGELOG.md, then merge to main"
 
@@ -172,6 +178,9 @@ dataset-export: ## Export the provider dataset as a redistributable archive
 dataset-import: ## Import a dataset archive (FILE=dist/....tar.gz)
 	@test -n "$(FILE)" || (echo "usage: make dataset-import FILE=dist/caregraph-providers-YYYY-MM-DD.tar.gz" && exit 1)
 	$(call with_env, uv run --project pipelines python -m pipelines.run_dataset import --file "$(FILE)")
+
+geocode: ## Fill missing addresses from coordinates (ARGS="--dry-run", --limit N)
+	$(call with_env, uv run --project pipelines python -m pipelines.run_geocode backfill $(ARGS))
 
 search-sync: ## Rebuild the Typesense search index from Postgres
 	$(call with_env, uv run --project pipelines python -m pipelines.run_search sync)

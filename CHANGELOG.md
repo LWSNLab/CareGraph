@@ -9,6 +9,26 @@ entry here, and a merge into `main`.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-22
+
+Addresses missing from OpenStreetMap can now be backfilled from provider
+coordinates, and production deployments are pinned to immutable image digests
+with automated post-deploy verification and one-command rollback.
+
+### Added
+
+- **Address backfill from coordinates (`make geocode`).** Providers whose
+  OpenStreetMap objects carry no `addr:*` tags can now have their missing
+  `strasse`, `plz`, `ort` and `bundesland` filled via rate-limited Nominatim
+  reverse geocoding, with a persistent coordinate cache and ODbL attribution
+  recorded in `details.derived_address`. Subsequent provider loads preserve
+  backfilled addresses instead of overwriting them with `NULL`.
+- **Digest-pinned deployments and explicit rollback (`deploy/`).** `deploy/resolve.sh`,
+  `deploy/deploy.sh`, `deploy/rollback.sh` and `deploy/verify.sh` pin every
+  rollout to an immutable image digest, verify that the local checkout matches
+  the image's `org.opencontainers.image.revision` label before running
+  migrations, and check from outside that internal ports stay closed.
+
 ## [0.2.0] — 2026-09-13
 
 The identifier a client should store is now in every response, and the search
@@ -126,7 +146,8 @@ answer from outside the project.
   OpenStreetMap objects carry no `addr:*` tags.
 - **Deduplication and address backfill are not built.**
 
-[Unreleased]: https://github.com/LWSNLab/CareGraph/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/LWSNLab/CareGraph/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/LWSNLab/CareGraph/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/LWSNLab/CareGraph/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/LWSNLab/CareGraph/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/LWSNLab/CareGraph/releases/tag/v0.1.0

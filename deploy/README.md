@@ -80,31 +80,52 @@ and `make env-prod` cannot reconstruct it.
 
 ## 5. Start
 
-```bash
-make up            # database, Redis, Typesense — migrations run on first boot
-make db-roles      # apply the generated passwords to the least-privilege roles
+Bring the dependencies up first. Migrations run on the first boot of an empty
+volume; `db-roles` gives the least-privilege roles the passwords `.env` expects.
 
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-  --profile app --profile edge pull
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-  --profile app --profile edge up -d
+```bash
+make up && make db-roles
 ```
 
-Add `--build` instead of the `pull` if nothing has been merged to `main` yet, so
-no image exists in the registry — that builds on the machine.
+Then find out what the release actually is, and deploy that:
 
-Caddy fetches a certificate on first boot; watch it with
+```bash
+deploy/resolve.sh v0.2.0
+```
+
+It prints the digests and the revision they were built from, with the two
+commands to run. **Deployment is by digest, never by tag** — a tag can point at
+a different image tomorrow than it did when it was tested, so it names a moving
+target. `deploy/deploy.sh` refuses a tag outright.
+
+```bash
+git fetch --tags && git checkout <revision>
+deploy/deploy.sh '<api@sha256:…>' '<ingest@sha256:…>'
+```
+
+The checkout comes first and is not optional: the compose files, the Caddyfile
+and the migrations all come from it, and `deploy.sh` compares the checkout
+against the image's `org.opencontainers.image.revision` label. If they disagree
+it stops — that mismatch is how an older binary meets a newer schema, and it is
+reachable by following a runbook that does not check.
+
+Caddy obtains its certificate on first boot; watch it with
 `docker compose logs -f caddy`.
 
-Then check that the API considers itself ready — this is the container's own
-healthcheck, so `docker compose ps` shows the same verdict:
+Finally, check the deployment from outside:
 
 ```bash
-curl https://api.caregraph.de/readyz
+deploy/verify.sh
 ```
 
-`degraded` means an optional dependency is down and the API still serves.
-`unavailable` with a 503 means Postgres is unreachable.
+That asserts both directions. Present: TLS terminates, `/readyz` answers 200,
+the contract is served, and `/v1` without a key is refused. Absent: PostgreSQL,
+Redis, Typesense and the API's own port do **not** answer from off the machine.
+
+The second half is the half that matters. The compose overlay binds Postgres to
+loopback and leaves Redis and Typesense unpublished — and until now nothing
+checked that it stayed that way. A `!override` dropped by a later edit, or a port
+opened for one debugging session, shows up in no readiness probe.
 
 ## 6. Data
 
@@ -209,24 +230,18 @@ make dataset-release               # exports and uploads to the latest release
 ## Updating
 
 **A merge into `main` is a release.** `.github/workflows/release.yml` builds both
-images and pushes them to GHCR, tagged `latest` and `sha-<commit>`. The server
-fetches them — nothing pushes to the server, so no inbound port beyond 80/443 and
-no server credentials at GitHub.
+images and pushes them to GHCR. The server fetches them — nothing pushes to the
+server, so no inbound port beyond 80/443 and no credentials for this machine at
+GitHub. The cost is up to one timer interval of delay.
 
 ```bash
 deploy/update.sh
 ```
 
-It pulls, restarts, **applies the migrations** and then checks
-`https://<domain>/readyz` before calling the update successful. The migration
-step matters: the compose mount only runs them when the volume is empty, so
-without it an update would leave an existing database on the old schema — the API
-would start, its readiness probe would pass on a plain ping, and every query
-would fail.
-
-A failed check does not roll back on its own. Migrations have already been
-applied by then, and an older image against a newer schema can be worse than the
-problem. The script says what to do instead.
+It resolves the followed tag to a digest **once**, moves the checkout to the
+matching revision, applies the migrations and deploys that digest — then records
+which digest it replaced. If the tag already points at what is running, it says
+so and does nothing.
 
 Automatically, every ten minutes:
 
@@ -239,19 +254,43 @@ journalctl -u caregraph-update -f
 In-flight requests drain for up to 20 seconds; `stop_grace_period` is 30, so
 Docker does not interrupt it.
 
-To pin or roll back, name a build in `.env` and re-run the script:
+### Going back
 
 ```bash
-CAREGRAPH_TAG=sha-1a2b3c4
+deploy/rollback.sh
 ```
 
-Without a registry — no network to GHCR, or a fork — the server can still build
-for itself:
+Returns to the previously deployed digest, which `deploy/state/digest.previous`
+records. No GitHub, no new build, one command. Name a digest explicitly to go
+somewhere else — `deploy/resolve.sh v0.1.1` prints one.
+
+**It does not happen automatically, and that is deliberate.** Rolling back the
+image does not roll back a migration, and these migrations are not additive:
+`0002` adds `source_id NOT NULL`, `0005` deletes rows. An older binary against
+this schema fails on insert, which is harder to see than a 503. Automatic
+rollback becomes safe once migrations are backward-compatible *by policy* — the
+mechanism without that guarantee is worse than neither, because it looks like
+safety.
+
+**A rollback is not symmetric.** It returns the binary, not the schema. Going
+back to an older schema is a restore from backup (`make restore`), which is a
+different and much heavier operation.
+
+Before rolling back, ask whether the image is the cause at all. A database,
+Redis or Typesense that is down looks identical from the outside — and in that
+case the old image will be just as unhealthy, having cost a second deployment to
+find out. `rollback.sh` says so when it happens.
+
+### Pinning
+
+Follow something other than `latest` by setting it in `.env`:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-  --profile app --profile edge up -d --build
+CAREGRAPH_FOLLOW=v0.2.0
 ```
+
+The digest is still resolved from that tag at deploy time and recorded, so what
+ran is always answerable after the fact.
 
 ## What this deliberately does not do
 
