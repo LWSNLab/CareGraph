@@ -357,6 +357,7 @@ components:
       properties:
         source_id:
           type: string
+          minLength: 1
           description: |
             **The identifier to store.** Derived from the source object, carried
             in the published dataset, and identical on every instance that

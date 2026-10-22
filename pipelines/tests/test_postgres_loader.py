@@ -119,6 +119,13 @@ def test_location_is_built_by_postgis_not_in_python():
     assert "ST_SetSRID(" in PostgresLoader._upsert_sql()
 
 
+def test_upsert_preserves_backfilled_address_fields_and_attribution():
+    sql = PostgresLoader._upsert_sql()
+    for col in ("ik_nummer", "strasse", "plz", "ort", "bundesland"):
+        assert f"{col} = COALESCE(EXCLUDED.{col}, care_infrastructure.{col})" in sql
+    assert "derived_address" in sql
+
+
 def test_provider_batch_sql_contains_multiple_rows_and_one_returning():
     values = ", ".join(PostgresLoader._provider_values_sql(f"_{i}") for i in range(2))
     sql = PostgresLoader._upsert_sql(values)

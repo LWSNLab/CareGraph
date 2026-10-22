@@ -119,7 +119,7 @@ func (s *PostgresKeyStore) Verify(ctx context.Context, presented string) (*Ident
 
 	ok, err := VerifySecret(secret, storedHash)
 	if err != nil {
-		return nil, fmt.Errorf("verify api key %s: %w", keyID, err)
+		return nil, fmt.Errorf("verify api key %s: %w", storedID, err)
 	}
 	if !ok {
 		s.store(ck, cacheEntry{identity: nil, expires: time.Now().Add(s.ttl)})

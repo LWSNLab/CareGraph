@@ -9,6 +9,20 @@ entry here, and a merge into `main`.
 
 ## [Unreleased]
 
+### Added
+
+- **Address backfill from coordinates (`make geocode`).** Providers whose
+  OpenStreetMap objects carry no `addr:*` tags can now have their missing
+  `strasse`, `plz`, `ort` and `bundesland` filled via rate-limited Nominatim
+  reverse geocoding, with a persistent coordinate cache and ODbL attribution
+  recorded in `details.derived_address`. Subsequent provider loads preserve
+  backfilled addresses instead of overwriting them with `NULL`.
+- **Digest-pinned deployments and explicit rollback (`deploy/`).** `deploy/resolve.sh`,
+  `deploy/deploy.sh`, `deploy/rollback.sh` and `deploy/verify.sh` pin every
+  rollout to an immutable image digest, verify that the local checkout matches
+  the image's `org.opencontainers.image.revision` label before running
+  migrations, and check from outside that internal ports stay closed.
+
 ## [0.2.0] — 2026-09-13
 
 The identifier a client should store is now in every response, and the search

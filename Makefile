@@ -40,7 +40,13 @@ ps: ## Show running services
 	docker compose ps
 
 migrate: ## Apply ALL migrations to the running db, in order
-	@for m in db/migrations/*.sql; do \
+	@if [ -f .env ]; then \
+		while IFS='=' read -r key value; do \
+			case "$$key" in ''|\#*) continue ;; esac; \
+			printenv "$$key" >/dev/null || export "$$key=$$value"; \
+		done < .env; \
+	fi; \
+	for m in db/migrations/*.sql; do \
 		echo "applying $$m"; \
 		docker compose exec -T db psql -U $${POSTGRES_USER:-caregraph} -d $${POSTGRES_DB:-caregraph} -v ON_ERROR_STOP=1 -q < $$m || exit 1; \
 	done

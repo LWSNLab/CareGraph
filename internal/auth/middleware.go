@@ -49,9 +49,15 @@ func APIKeyMiddleware(store KeyStore, limiter *ratelimit.Limiter, log *slog.Logg
 
 		case errors.Is(err, ErrMalformedKey), errors.Is(err, ErrNoSuchKey):
 			// Expected traffic, not an incident: log at DEBUG so a scan does not
-			// fill the error log. The key itself is never logged.
+			// fill the error log. The key itself is never logged; map to a fixed
+			// reason string so static taint analysis (CodeQL go/log-injection) sees
+			// no flow from the header into the log record.
+			reason := "no_such_key"
+			if errors.Is(err, ErrMalformedKey) {
+				reason = "malformed_key"
+			}
 			httpx.Logger(log, c).DebugContext(c.Request.Context(),
-				"api key rejected", "reason", err)
+				"api key rejected", "reason", reason)
 			chargeFailedAuth(c, limiter, log)
 			httpx.Abort(c, http.StatusUnauthorized, httpx.CodeUnauthorized,
 				"Unauthorized: Invalid API Key provided")

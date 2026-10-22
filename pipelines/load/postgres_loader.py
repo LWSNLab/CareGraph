@@ -51,7 +51,12 @@ _UPSERT_COLUMNS = (
 # an IK, and `ik_nummer = EXCLUDED.ik_nummer` would erase what an earlier run
 # had resolved. Until the insurer key stopped flapping this was invisible,
 # because a run without an IK inserted a second row instead of updating.
-_PRESERVE_IF_NULL = frozenset({"ik_nummer"})
+#
+# Likewise, `strasse`, `plz`, `ort` and `bundesland` may be filled in after the
+# load by reverse geocoding (E1-S3). A subsequent OSM scrape still carries no
+# `addr:*` tags for those objects, so an unconditional overwrite would wipe the
+# backfilled addresses on every reload.
+_PRESERVE_IF_NULL = frozenset({"ik_nummer", "strasse", "plz", "ort", "bundesland"})
 _PROVIDER_VALUE_COLUMNS = (
     "source_id", *_UPSERT_COLUMNS,
 )
@@ -118,6 +123,22 @@ class PostgresLoader:
         def assignment(col: str) -> str:
             if col in _PRESERVE_IF_NULL:
                 return f"{col} = COALESCE(EXCLUDED.{col}, care_infrastructure.{col})"
+            if col == "details":
+                # Keep `derived_address` (written by E1-S3 reverse geocoding,
+                # including ODbL attribution) when any address column still
+                # comes from the stored row rather than the incoming record.
+                return (
+                    "details = CASE WHEN ("
+                    "(EXCLUDED.strasse IS NULL AND care_infrastructure.strasse IS NOT NULL)"
+                    " OR (EXCLUDED.plz IS NULL AND care_infrastructure.plz IS NOT NULL)"
+                    " OR (EXCLUDED.ort IS NULL AND care_infrastructure.ort IS NOT NULL)"
+                    " OR (EXCLUDED.bundesland IS NULL AND care_infrastructure.bundesland IS NOT NULL)"
+                    ") AND care_infrastructure.details ? 'derived_address'"
+                    " THEN jsonb_build_object("
+                    "'derived_address', care_infrastructure.details->'derived_address'"
+                    ") || EXCLUDED.details"
+                    " ELSE EXCLUDED.details END"
+                )
             return f"{col} = EXCLUDED.{col}"
 
         assignments = ",\n            ".join(assignment(col) for col in _UPSERT_COLUMNS)
