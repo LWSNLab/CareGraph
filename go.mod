@@ -3,7 +3,7 @@ module github.com/LWSNLab/caregraph
 go 1.26.0
 
 require (
-	github.com/getkin/kin-openapi v0.151.0
+	github.com/getkin/kin-openapi v0.152.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/redis/go-redis/v9 v9.23.0
